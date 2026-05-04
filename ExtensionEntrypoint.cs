@@ -21,11 +21,13 @@ namespace DeepSeek_v4_for_VisualStudio
         };
 
         /// <inheritdoc />
+#pragma warning disable VSEXTPREVIEW_SETTINGS // The settings API is currently in preview and marked as experimental
         protected override void InitializeServices(IServiceCollection serviceCollection)
         {
             base.InitializeServices(serviceCollection);
-
             // You can configure dependency injection here by adding services to the serviceCollection.
+            serviceCollection.AddSettingsObservers();
         }
+#pragma warning restore VSEXTPREVIEW_SETTINGS
     }
 }

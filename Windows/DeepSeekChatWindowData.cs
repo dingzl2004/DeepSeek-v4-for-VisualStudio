@@ -1,38 +1,30 @@
 ﻿using DeepSeek_v4_for_VisualStudio.Models;
+using DeepSeek_v4_for_VisualStudio.Services;
+using DeepSeek_v4_for_VisualStudio.Utils;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.UI;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using DeepSeek_v4_for_VisualStudio.Settings;
+using Microsoft.VisualStudio.Extensibility.Shell;
 
 namespace DeepSeek_v4_for_VisualStudio.Windows
 {
-    /// <summary>
-    /// ViewModel for the DeepSeekChatWindowContent remote user control.
-    /// </summary>
     [DataContract]
     internal class DeepSeekChatWindowData : NotifyPropertyChangedObject, IDisposable
     {
         private readonly VisualStudioExtensibility _extensibility;
+        private DeepSeekApiService? _apiService;
         private CancellationTokenSource? _currentStreamingCts;
 
-        /// <summary>
-        /// 当前客户端上下文 — 由 Command 层在打开工具窗口时注入
-        /// 用于访问编辑器、项目系统等 VS IDE 功能
-        /// </summary>
         internal static IClientContext? CurrentClientContext { get; set; }
 
-        public DeepSeekChatWindowData(VisualStudioExtensibility extensibility)
-        {
-            _extensibility = extensibility;
-
-            SendCommand = new AsyncCommand(SendMessageAsync);
-            ClearCommand = new AsyncCommand(ClearMessagesAsync);
-            StopCommand = new AsyncCommand(StopGenerationAsync);
-            CopyMessageCommand = new AsyncCommand(CopyMessageAsync);
-            InsertCodeCommand = new AsyncCommand(InsertCodeToEditorAsync);
-        }
-
         // ─── 可观察属性 ───
-
         private string _inputText = string.Empty;
         [DataMember]
         public string InputText
@@ -57,38 +49,157 @@ namespace DeepSeek_v4_for_VisualStudio.Windows
             set => SetProperty(ref _statusText, value);
         }
 
-        /// <summary>消息列表</summary>
         [DataMember]
         public ObservableList<ChatMessage> Messages { get; } = new();
 
-        // ─── 命令 ───
+        /// <summary>
+        /// 用于驱动 ListBox 自动滚动到最新消息。
+        /// 每次消息添加或流式内容更新时，将此值设置为 Messages.Count - 1。
+        /// 对于流式更新（同一索引内容增长），先设为 -1 再设回以强制触发 SelectionChanged → ScrollIntoView。
+        /// </summary>
+        private int _selectedMessageIndex = -1;
+        [DataMember]
+        public int SelectedMessageIndex
+        {
+            get => _selectedMessageIndex;
+            set => SetProperty(ref _selectedMessageIndex, value);
+        }
 
+        // ─── 模型与思考配置 ───
+        private string _selectedModel = "deepseek-v4-pro";
+        [DataMember]
+        public string SelectedModel
+        {
+            get => _selectedModel;
+            set
+            {
+                if (SetProperty(ref _selectedModel, value))
+                {
+                    _apiService?.UpdateModel(value);
+                    Logger.Info($"模型切换至: {value}");
+                }
+            }
+        }
+
+        [DataMember]
+        public List<string> AvailableModels { get; } = new()
+        {
+            "deepseek-v4-pro",
+            "deepseek-v4-flash"
+        };
+
+        private bool _isThinkingEnabled = true;
+        [DataMember]
+        public bool IsThinkingEnabled
+        {
+            get => _isThinkingEnabled;
+            set
+            {
+                if (SetProperty(ref _isThinkingEnabled, value))
+                {
+                    _apiService?.ConfigureThinking(value, _reasoningEffort);
+                    Logger.Info($"深度思考: {value}, 推理强度: {_reasoningEffort}");
+                }
+            }
+        }
+
+        private string _reasoningEffort = "high";
+        [DataMember]
+        public string ReasoningEffort
+        {
+            get => _reasoningEffort;
+            set
+            {
+                if (SetProperty(ref _reasoningEffort, value))
+                {
+                    _apiService?.ConfigureThinking(_isThinkingEnabled, value);
+                    Logger.Info($"推理强度切换: {value}");
+                }
+            }
+        }
+
+        [DataMember]
+        public List<string> ReasoningEfforts { get; } = new()
+        {
+            "high",
+            "max"
+        };
+
+        // ─── 命令 ───
         [DataMember] public AsyncCommand SendCommand { get; }
         [DataMember] public AsyncCommand ClearCommand { get; }
         [DataMember] public AsyncCommand StopCommand { get; }
         [DataMember] public AsyncCommand CopyMessageCommand { get; }
         [DataMember] public AsyncCommand InsertCodeCommand { get; }
+        [DataMember] public AsyncCommand OpenConfigCommand { get; }
 
-        // ─── 公共方法 ───
+        // ─── 历史记录 (API 格式) ───
+        private readonly List<ChatApiMessage> _conversationHistory = new();
 
-        public void AddMessage(ChatMessage message)
+        public DeepSeekChatWindowData(VisualStudioExtensibility extensibility)
         {
-            Messages.Add(message);
+            _extensibility = extensibility;
+            Logger.Info("初始化 ViewModel");
+
+            _ = InitializeApiServiceAsync();
+
+            // ★ 关键修复：所有命令指定在主线程执行
+            SendCommand = new AsyncCommand(SendMessageAsync);
+            ClearCommand = new AsyncCommand(ClearMessagesAsync);
+            StopCommand = new AsyncCommand(StopGenerationAsync);
+            CopyMessageCommand = new AsyncCommand(CopyMessageAsync);
+            InsertCodeCommand = new AsyncCommand(InsertCodeToEditorAsync);
+            OpenConfigCommand = new AsyncCommand(OpenConfigAsync);
+        }
+
+        private async Task InitializeApiServiceAsync()
+        {
+            _apiService?.Dispose();
+            string apiKey = await GetApiKeyFromConfigAsync();
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                _apiService = new DeepSeekApiService(apiKey, _selectedModel);
+                _apiService.ConfigureThinking(_isThinkingEnabled, _reasoningEffort);
+                Logger.Info("API 服务初始化成功");
+            }
+            else
+            {
+                Logger.Error("API Key 为空，请检查配置");
+            }
+        }
+
+        private async Task<string> GetApiKeyFromConfigAsync()
+        {
+#pragma warning disable VSEXTPREVIEW_SETTINGS // The settings API is currently in preview and marked as experimental
+            var result = await _extensibility.Settings().ReadEffectiveValueAsync(DeepSeekSettings.ApiKeySetting, CancellationToken.None);
+            return result.ValueOrDefault(defaultValue: "");
+#pragma warning restore VSEXTPREVIEW_SETTINGS
         }
 
         // ─── 命令实现 ───
-
         private async Task SendMessageAsync(object? parameter, CancellationToken cancellationToken)
         {
-            var userText = InputText?.Trim();
-            if (string.IsNullOrEmpty(userText)) return;
+            await InitializeApiServiceAsync(); // 热重载 API 服务
 
-            Messages.Add(new ChatMessage
+            var userText = InputText?.Trim();
+            if (string.IsNullOrEmpty(userText) || _apiService == null)
+            {
+                Logger.Info("发送被忽略：输入为空或服务未初始化");
+                return;
+            }
+
+            Logger.Info($"用户发送消息: {userText[..Math.Min(userText.Length, 50)]}...");
+
+            // 添加用户消息
+            var userMsg = new ChatMessage
             {
                 Role = "user",
                 Content = userText,
                 Timestamp = DateTime.Now
-            });
+            };
+            Messages.Add(userMsg);
+            _conversationHistory.Add(new ChatApiMessage { Role = "user", Content = userText });
+            SelectedMessageIndex = Messages.Count - 1;
 
             InputText = string.Empty;
 
@@ -109,14 +220,46 @@ namespace DeepSeek_v4_for_VisualStudio.Windows
 
             try
             {
-                await GenerateStreamingResponseAsync(assistantMessage, userText, _currentStreamingCts.Token);
+                var requestMessages = BuildRequestMessages();
+                Logger.Info($"开始流式请求，模型: {_selectedModel}");
+
+                await foreach (var chunk in _apiService.ChatStreamAsync(requestMessages, _currentStreamingCts.Token))
+                {
+                    if (chunk.StartsWith("[THINKING]"))
+                    {
+                        // 思考内容可单独处理，这里仅记录
+                        StatusText = "DeepSeek 思考中...";
+                    }
+                    else
+                    {
+                        // 因为命令在主线程执行，这里可以直接更新 UI 属性
+                        assistantMessage.Content += chunk;
+                        StatusText = "DeepSeek 回复中...";
+                        // 流式更新时强制 ListBox 重新滚动到最新消息
+                        // 先设为 -1 再设回以触发 SelectionChanged → ScrollIntoView
+                        var lastIdx = Messages.Count - 1;
+                        SelectedMessageIndex = -1;
+                        SelectedMessageIndex = lastIdx;
+                    }
+                }
+
+                Logger.Info($"流式回复完成，总长度: {assistantMessage.Content.Length} 字符");
+                Logger.Info($"内容为: {assistantMessage.Content}");
+
+                _conversationHistory.Add(new ChatApiMessage
+                {
+                    Role = "assistant",
+                    Content = assistantMessage.Content
+                });
             }
             catch (OperationCanceledException)
             {
+                Logger.Info("用户停止了生成");
                 assistantMessage.Content += "\n\n*[已停止]*";
             }
             catch (Exception ex)
             {
+                Logger.Error("API 调用出错", ex);
                 assistantMessage.Content = $"抱歉，发生了错误，请重试。\n\n```\n{ex.Message}\n```";
             }
             finally
@@ -128,65 +271,26 @@ namespace DeepSeek_v4_for_VisualStudio.Windows
             }
         }
 
-        /// <summary>
-        /// 流式生成响应 — 替换为实际的 DeepSeek API 调用
-        /// </summary>
-        private async Task GenerateStreamingResponseAsync(
-            ChatMessage assistantMessage,
-            string userInput,
-            CancellationToken ct)
+        private List<ChatApiMessage> BuildRequestMessages()
         {
-            // TODO: 替换为 DeepSeek API 调用
-            // var client = new DeepSeekClient(apiKey);
-            // await foreach (var chunk in client.ChatStreamAsync(messages, ct))
-            //     assistantMessage.Content += chunk;
-
-            var simulatedResponse = GenerateSimulatedResponse(userInput);
-            var words = simulatedResponse.Split(' ');
-
-            foreach (var word in words)
+            return _conversationHistory.Select(m => new ChatApiMessage
             {
-                ct.ThrowIfCancellationRequested();
-                assistantMessage.Content += word + " ";
-                await Task.Delay(40, ct);
-            }
-        }
-
-        private static string GenerateSimulatedResponse(string input)
-        {
-            if (input.Contains("解释") || input.Contains("explain"))
-            {
-                return "这段代码定义了一个类，它包含以下主要部分：\n\n" +
-                       "```csharp\npublic class Example\n{\n" +
-                       "    private readonly string _name;\n" +
-                       "    public Example(string name) => _name = name;\n" +
-                       "    public string GetGreeting() => $\"Hello, {_name}!\";\n" +
-                       "}\n```\n\n" +
-                       "这是一个简单的示例类，使用了 C# 的表达式体成员语法。";
-            }
-            if (input.Contains("修复") || input.Contains("fix"))
-            {
-                return "我发现了以下问题并提供修复建议：\n\n" +
-                       "**问题**: 变量未初始化就使用了。\n\n" +
-                       "**修复**: 在使用前添加初始化代码。";
-            }
-            return $"我理解你的问题：「{input}」\n\n" +
-                   "这是一个很好的问题！让我帮你分析一下...\n\n" +
-                   "根据最佳实践，我建议采用以下方案：\n\n" +
-                   "1. 首先，确保理解需求\n" +
-                   "2. 然后，选择合适的架构模式\n" +
-                   "3. 最后，编写可测试的代码\n\n" +
-                   "需要我进一步展开某个方面吗？";
+                Role = m.Role,
+                Content = m.Content
+            }).ToList();
         }
 
         private Task ClearMessagesAsync(object? parameter, CancellationToken cancellationToken)
         {
+            Logger.Info("清空对话");
             Messages.Clear();
+            _conversationHistory.Clear();
             return Task.CompletedTask;
         }
 
         private Task StopGenerationAsync(object? parameter, CancellationToken cancellationToken)
         {
+            Logger.Info("停止生成请求");
             _currentStreamingCts?.Cancel();
             return Task.CompletedTask;
         }
@@ -195,49 +299,64 @@ namespace DeepSeek_v4_for_VisualStudio.Windows
         {
             if (parameter is string text)
             {
-                try { System.Windows.Clipboard.SetText(text); } catch { }
+                try
+                {
+                    System.Windows.Clipboard.SetText(text);
+                    Logger.Info("消息已复制到剪贴板");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error("复制失败", ex);
+                }
             }
             return Task.CompletedTask;
         }
 
-        /// <summary>
-        /// 插入代码到当前活动编辑器的光标位置
-        /// 使用 EditorExtensibility.EditAsync + ITextDocumentEditor.Insert
-        /// </summary>
         private async Task InsertCodeToEditorAsync(object? parameter, CancellationToken ct)
         {
             if (parameter is not string code || string.IsNullOrEmpty(code)) return;
-
             var context = CurrentClientContext;
-            if (context is null) return;
+            if (context is null)
+            {
+                Logger.Error("ClientContext 为空，无法插入代码");
+                return;
+            }
 
             try
             {
-                // 1. 获取当前活动文本视图（只读快照）
                 var textView = await _extensibility.Editor().GetActiveTextViewAsync(context, ct);
                 if (textView is null) return;
 
-                // 2. 通过 EditAsync 获取文档编辑器（可写）
                 await _extensibility.Editor().EditAsync(editBatch =>
                 {
-                    var document = textView.Document;                      // ITextDocumentSnapshot
-                    var docEditor = document.AsEditable(editBatch);       // ITextDocumentEditor
-                    var caretPos = textView.Selection.Start.Offset;    // 光标位置 (int)
-
+                    var document = textView.Document;
+                    var docEditor = document.AsEditable(editBatch);
+                    var caretPos = textView.Selection.Start.Offset;
                     docEditor.Insert(caretPos, code);
                 }, ct);
+
+                Logger.Info("代码插入编辑器成功");
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
             {
-                // 用户取消了操作
+                Logger.Error("插入代码失败", ex);
             }
+        }
+
+        private async Task OpenConfigAsync(object? parameter, CancellationToken cancellationToken)
+        {
+            Logger.Info("打开配置页面");
+            await _extensibility.Shell().ShowPromptAsync("Please configure the API Key in Tools -> Options -> DeepSeek Settings", PromptOptions.OK, cancellationToken);
         }
 
         public void Dispose()
         {
+            Logger.Info("ViewModel 释放");
             _currentStreamingCts?.Cancel();
             _currentStreamingCts?.Dispose();
             Messages.Clear();
+            _apiService?.Dispose();
         }
     }
 }

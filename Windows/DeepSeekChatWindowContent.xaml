@@ -21,6 +21,141 @@
                 <Setter Property="BorderBrush" Value="#555555" />
                 <Setter Property="BorderThickness" Value="1" />
             </Style>
+            <Style TargetType="ComboBox">
+                <Setter Property="Background" Value="#2D2D2D" />
+                <Setter Property="Foreground" Value="#D4D4D4" />
+                <Setter Property="BorderBrush" Value="#555555" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="8,4" />
+                <Setter Property="MinWidth" Value="80" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <!-- 切换按钮 (ToggleButton) -->
+                                <ToggleButton Name="ToggleButton" 
+                                              Grid.Row="0" 
+                                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                              Background="{TemplateBinding Background}"
+                                              BorderBrush="{TemplateBinding BorderBrush}"
+                                              BorderThickness="{TemplateBinding BorderThickness}"
+                                              Foreground="{TemplateBinding Foreground}">
+
+                                    <!-- 自定义 ToggleButton 模板 -->
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Border"
+                                                    Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <!-- 当前选中的内容 -->
+                                                    <ContentPresenter Grid.Column="0" 
+                                                                      Margin="6,0,0,0"
+                                                                      Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                      ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                      HorizontalAlignment="Stretch" 
+                                                                      VerticalAlignment="Center" />
+
+                                                    <!-- 下拉箭头 -->
+                                                    <Path Grid.Column="1" 
+                                                          Data="M 0 0 L 4 4 L 8 0" 
+                                                          Stroke="#888888" 
+                                                          StrokeThickness="1" 
+                                                          Fill="Transparent" 
+                                                          VerticalAlignment="Center" 
+                                                          Margin="0,0,8,0" />
+                                                </Grid>
+                                            </Border>
+
+                                            <ControlTemplate.Triggers>
+                                                <!-- 鼠标悬停时 -->
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Border" Property="Background" Value="#3E3E42" />
+                                                    <Setter TargetName="Border" Property="BorderBrush" Value="#777777" />
+                                                </Trigger>
+                                                <!-- 下拉菜单打开时 -->
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="Border" Property="Background" Value="#2D2D2D" />
+                                                    <Setter TargetName="Border" Property="BorderBrush" Value="#6CAFD9" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+
+                                <!-- 下拉弹窗 -->
+                                <Popup Name="Popup" 
+                                       IsOpen="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}}" 
+                                       PlacementTarget="{Binding ElementName=ToggleButton}" 
+                                       Placement="Bottom" 
+                                       StaysOpen="False" 
+                                       AllowsTransparency="True">
+                                    <Border Background="#2D2D2D" 
+                                            BorderBrush="#555555" 
+                                            BorderThickness="1" 
+                                            CornerRadius="4" 
+                                            Margin="0,2,0,0">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="300">
+                                            <ItemsPresenter />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="ComboBoxItem">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="#D4D4D4" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <Border Background="{TemplateBinding Background}" 
+                                    BorderBrush="{TemplateBinding BorderBrush}" 
+                                    BorderThickness="{TemplateBinding BorderThickness}" 
+                                    CornerRadius="2">
+                                <ContentPresenter Content="{TemplateBinding Content}" 
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}" 
+                                                  ContentStringFormat="{TemplateBinding ContentStringFormat}" 
+                                                  Margin="{TemplateBinding Padding}" 
+                                                  HorizontalAlignment="Stretch" 
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <!-- 鼠标悬停状态 -->
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#3E3E42" />
+                                    <Setter Property="Foreground" Value="#FFFFFF" />
+                                </Trigger>
+                                <!-- 选中状态 -->
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#264F78" />
+                                    <Setter Property="Foreground" Value="#FFFFFF" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="CheckBox">
+                <Setter Property="Foreground" Value="#D4D4D4" />
+            </Style>
 
             <!-- 用户消息气泡 -->
             <Style x:Key="UserBubbleStyle" TargetType="Border">
@@ -75,15 +210,37 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
+                <!-- 状态显示 -->
                 <RowDefinition Height="Auto" />
+                <!-- 组合输入区 -->
             </Grid.RowDefinitions>
 
             <!-- ─── 消息列表 ─── -->
-            <ScrollViewer Grid.Row="0"
-                          VerticalScrollBarVisibility="Auto"
-                          Background="#1E1E1E">
-                <ItemsControl ItemsSource="{Binding Messages}" Margin="4">
-                    <ItemsControl.ItemTemplate>
+            <ListBox Grid.Row="0"
+                     ItemsSource="{Binding Messages}"
+                     SelectedIndex="{Binding SelectedMessageIndex, Mode=OneWay}"
+                     Background="#1E1E1E"
+                     BorderThickness="0"
+                     Margin="0" Padding="4"
+                     HorizontalContentAlignment="Stretch"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.CanContentScroll="False">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
                         <DataTemplate>
                             <StackPanel>
                                 <Border Style="{StaticResource UserBubbleStyle}"
@@ -121,46 +278,72 @@
                                 </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+                </ListBox.ItemTemplate>
+            </ListBox>
 
-            <!-- ─── 状态栏 ─── -->
-            <Border Grid.Row="1"
-                    BorderBrush="#555555"
-                    BorderThickness="0,1,0,0" Padding="4,3">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="{Binding StatusText}" Style="{StaticResource StatusStyle}" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Content="清空" Command="{Binding ClearCommand}" ToolTip="清空对话" Margin="2,0" Padding="6,2" />
-                        <Button Content="停止" Command="{Binding StopCommand}" ToolTip="停止生成" Margin="2,0" Padding="6,2" />
-                    </StackPanel>
-                </Grid>
-            </Border>
+            <!-- ─── 状态显示 ─── -->
+            <TextBlock Grid.Row="1" Text="{Binding StatusText}" Style="{StaticResource StatusStyle}" Margin="12,4,12,0" />
 
-            <!-- ─── 输入区 ─── -->
+            <!-- ─── 组合输入区 ─── -->
             <Border Grid.Row="2"
-                    BorderBrush="#555555"
-                    BorderThickness="0,1,0,0" Padding="10,8">
+                    BorderBrush="#444444"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Background="#2D2D2D"
+                    Margin="8,4,8,12" Padding="4">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Grid.Column="0"
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBox Grid.Row="0"
                              Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap"
-                             MinHeight="32" MaxHeight="140"
+                             MinHeight="50" MaxHeight="140"
+                             Background="Transparent" BorderThickness="0"
                              VerticalScrollBarVisibility="Auto"
-                             VerticalContentAlignment="Center" Padding="8,6" />
-                    <Button Grid.Column="1" Content="发送"
-                            Command="{Binding SendCommand}"
-                            MinWidth="64" MinHeight="32"
-                            Margin="10,0,0,0" VerticalAlignment="Bottom" Padding="12,4" />
+                             VerticalContentAlignment="Top" Padding="4">
+                        <TextBox.InputBindings>
+                            <KeyBinding Key="Enter" Command="{Binding SendCommand}" />
+                        </TextBox.InputBindings>
+                    </TextBox>
+
+                    <!-- Bottom Toolbar -->
+                    <Grid Grid.Row="1" Margin="4,8,4,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left Toolbar -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="⚡" Foreground="#888888" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="14" />
+                                <ComboBox ItemsSource="{Binding AvailableModels}"
+                                SelectedItem="{Binding SelectedModel}"
+                                BorderThickness="0"
+                                MinWidth="110" Margin="0,0,12,0" />
+
+                                <CheckBox IsChecked="{Binding IsThinkingEnabled}"
+                                      Content="深度思考"
+                                      VerticalAlignment="Center" Margin="0,0,8,0" />
+
+                                 <ComboBox ItemsSource="{Binding ReasoningEfforts}"
+                                SelectedItem="{Binding ReasoningEffort}"
+                                BorderThickness="0"
+                                MinWidth="60"
+                                Visibility="{Binding IsThinkingEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
+
+                        <!-- Right Toolbar -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal">
+                            <Button Content="清空" Command="{Binding ClearCommand}" ToolTip="清空对话" Background="Transparent" BorderThickness="0" Margin="0,0,4,0" />
+                            <Button Content="停止" Command="{Binding StopCommand}" ToolTip="停止生成" Background="Transparent" BorderThickness="0" Margin="0,0,4,0" />
+                            <Button Content="⚙" Command="{Binding OpenConfigCommand}" ToolTip="配置 API 密钥" Background="Transparent" BorderThickness="0" Margin="0,0,4,0" FontSize="14" />
+                            <Button Content="➤" Command="{Binding SendCommand}" ToolTip="发送 (Enter)" Background="Transparent" BorderThickness="0" Foreground="#6CAFD9" FontSize="14" Padding="8,0" />
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>

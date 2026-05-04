@@ -1,5 +1,7 @@
 ﻿using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.Commands;
+using Microsoft.VisualStudio.Extensibility.Shell;
+using DeepSeek_v4_for_VisualStudio.Utils;
 using System.Threading;
 using System.Threading.Tasks;
 
