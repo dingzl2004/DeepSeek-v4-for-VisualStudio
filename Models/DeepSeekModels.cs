@@ -212,6 +212,23 @@ namespace DeepSeek_v4_for_VisualStudio.Models
             set => SetProperty(ref _isRendered, value);
         }
 
+        /// <summary>
+        /// 用户消息附带的文件名列表（不含路径，仅文件名）。
+        /// 用于 UI 展示已上传的文件标签。
+        /// 仅对 Role == "user" 的消息有意义。
+        /// </summary>
+        [DataMember]
+        public List<string> AttachedFileNames { get; set; } = new();
+
+        /// <summary>
+        /// 用户消息附带的文件解析结果列表。
+        /// 包含文件名、内容、错误信息等，用于可折叠 UI 展示。
+        /// 此属性不参与 RPC 同步（较大），仅用于本地持久化。
+        /// 仅对 Role == "user" 的消息有意义。
+        /// </summary>
+        [DataMember]
+        public List<FileParseResult> AttachedFiles { get; set; } = new();
+
         // INotifyPropertyChanged 实现
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -291,5 +308,46 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// <summary>是否需要联网搜索</summary>
         [JsonPropertyName("need_search")]
         public bool NeedSearch { get; set; } = true;
+    }
+
+    // ======== 文件上传模型 ========
+
+    /// <summary>
+    /// 文件解析结果。
+    /// 存储上传文件的元数据和解析后的文本内容。
+    /// </summary>
+    [DataContract]
+    public class FileParseResult
+    {
+        /// <summary>文件名（含扩展名）</summary>
+        [DataMember]
+        public string FileName { get; set; } = string.Empty;
+
+        /// <summary>文件扩展名（含点号）</summary>
+        [DataMember]
+        public string FileExtension { get; set; } = string.Empty;
+
+        /// <summary>文件完整路径（仅上传时使用，不持久化）</summary>
+        public string FilePath { get; set; } = string.Empty;
+
+        /// <summary>解析出的文本内容</summary>
+        [DataMember]
+        public string? Content { get; set; }
+
+        /// <summary>是否成功解析</summary>
+        [DataMember]
+        public bool Success { get; set; }
+
+        /// <summary>解析错误信息（仅失败时）</summary>
+        [DataMember]
+        public string? Error { get; set; }
+
+        /// <summary>内容是否因过长而被截断</summary>
+        [DataMember]
+        public bool Truncated { get; set; }
+
+        /// <summary>截断提示信息</summary>
+        [DataMember]
+        public string? TruncationNote { get; set; }
     }
 }

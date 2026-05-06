@@ -60,6 +60,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private string _webSearchEngine = "Off"; // "Off" | "Baidu" | "DuckDuckGo"
         private readonly List<string> _pendingWarnings = new(); // 待注入的警告消息
 
+        // ── 文件上传 ──
+        private readonly List<string> _attachedFilePaths = new(); // 已选文件路径列表
+
         // ── 多会话支持 ──
         private SessionsContainer? _sessionsContainer;
         private ChatSession? _activeSession;
@@ -68,6 +71,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private bool _browserInitialized;
         private int _lastRenderedMessagesLength;
         private readonly StringBuilder _messagesHtml = new();
+
+        // ── 线程安全 ──
+        private readonly object _lock = new();
 
         #endregion
 
@@ -89,10 +95,12 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             ThinkingCheckBox.IsChecked = true;
 
-            // 联网搜索引擎选择: 默认百度
-            WebSearchEngineComboBox.ItemsSource = new[] { "关闭", "🔍 百度搜索", "🦆 DuckDuckGo" };
-            WebSearchEngineComboBox.SelectedIndex = 1; // 默认百度搜索
-            _webSearchEngine = "Baidu";
+            // 联网搜索: 默认关闭
+            WebSearchEngineComboBox.ItemsSource = new[] { "🔍 百度搜索", "🦆 DuckDuckGo" };
+            WebSearchEngineComboBox.SelectedIndex = 0; // 默认百度
+
+            _webSearchEngine = "Off";
+            UpdateWebSearchToggleAppearance();
 
             // 注册 WebView2 事件
             ChatWebView.CoreWebView2InitializationCompleted += ChatWebView_CoreWebView2InitializationCompleted;
@@ -271,10 +279,20 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     _messages.Add(msg);
                     if (msg.Role is "user" or "assistant")
                     {
+                        // 对用户消息，重构完整内容（用户文本 + 文件内容）发送给 AI
+                        string apiContent = msg.Content ?? string.Empty;
+                        if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                        {
+                            string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                            if (!string.IsNullOrEmpty(fileContext))
+                            {
+                                apiContent = fileContext + "\n" + apiContent;
+                            }
+                        }
                         _conversationHistory.Add(new ChatApiMessage
                         {
                             Role = msg.Role,
-                            Content = msg.Content ?? string.Empty,
+                            Content = apiContent,
                         });
                     }
                 }
@@ -378,11 +396,11 @@ namespace DeepSeek_v4_for_VisualStudio.View
         /// <summary>
         /// 构建消息 HTML 片段并追加到 _messagesHtml，然后更新浏览器。
         /// </summary>
-        private void AddMessagesHtml(string role, string content, string? reasoningContent = null)
+        private void AddMessagesHtml(string role, string content, string? reasoningContent = null, List<FileParseResult>? attachedFiles = null)
         {
             if (role == "user")
             {
-                _messagesHtml.Append(ChatHtmlService.BuildUserMessageHtml(content));
+                _messagesHtml.Append(ChatHtmlService.BuildUserMessageHtml(content, attachedFiles));
             }
             else
             {
@@ -514,51 +532,87 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private async void SwitchToSession(ChatSession session)
         #pragma warning restore VSTHRD100
         {
-            if (session == null || session == _activeSession) return;
-
-            if (_isGenerating)
+            try
             {
-                _currentStreamingCts?.Cancel();
-                _isGenerating = false;
-                UpdateButtonsState();
-            }
+                if (session == null || session == _activeSession) return;
 
-            // 保存当前会话
-            SaveCurrentSession();
-
-            // 切换到新会话
-            _activeSession = session;
-            _activeSession.LastActiveAt = DateTime.Now;
-
-            // 清空并加载消息
-            _messages.Clear();
-            _conversationHistory.Clear();
-            _messagesHtml.Clear();
-            _lastRenderedMessagesLength = 0;
-
-            foreach (var msg in _activeSession.Messages)
-            {
-                msg.IsStreaming = false;
-                _messages.Add(msg);
-                if (msg.Role is "user" or "assistant")
+                lock (_lock)
                 {
-                    _conversationHistory.Add(new ChatApiMessage
+                    if (_isGenerating)
                     {
-                        Role = msg.Role,
-                        Content = msg.Content ?? string.Empty,
-                    });
+                        _currentStreamingCts?.Cancel();
+                        _isGenerating = false;
+                    }
                 }
+
+                UpdateButtonsState();
+
+                // 保存当前会话
+                SaveCurrentSession();
+
+                lock (_lock)
+                {
+                    // 切换到新会话
+                    _activeSession = session;
+                    _activeSession.LastActiveAt = DateTime.Now;
+
+                    // 清空并加载消息
+                    _messages.Clear();
+                    _conversationHistory.Clear();
+                    _messagesHtml.Clear();
+                    _lastRenderedMessagesLength = 0;
+                }
+
+                foreach (var msg in _activeSession.Messages)
+                {
+                    msg.IsStreaming = false;
+                    lock (_lock)
+                    {
+                        _messages.Add(msg);
+                    }
+                    if (msg.Role is "user" or "assistant")
+                    {
+                        // 对用户消息，重构完整内容（用户文本 + 文件内容）发送给 AI
+                        string apiContent = msg.Content ?? string.Empty;
+                        if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                        {
+                            string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                            if (!string.IsNullOrEmpty(fileContext))
+                            {
+                                apiContent = fileContext + "\n" + apiContent;
+                            }
+                        }
+                        lock (_lock)
+                        {
+                            _conversationHistory.Add(new ChatApiMessage
+                            {
+                                Role = msg.Role,
+                                Content = apiContent,
+                            });
+                        }
+                    }
+                }
+
+                // 更新下拉框选中项
+                PopulateSessionComboBox();
+
+                // 完整刷新浏览器
+                RebuildMessagesHtml();
+                _browserInitialized = false;
+                UpdateBrowser();
+
+                Logger.Info($"切换到会话: {_activeSession.Title}");
             }
-
-            // 更新下拉框选中项
-            PopulateSessionComboBox();
-
-            // 完整刷新浏览器
-            RebuildMessagesHtml();
-            _browserInitialized = false;
-            UpdateBrowser();
-
-            Logger.Info($"切换到会话: {_activeSession.Title}");
+            catch (Exception ex)
+            {
+                Logger.Error($"SwitchToSession 异常: {ex.Message}", ex);
+                try
+                {
+                    await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    StatusLabel.Text = $"会话切换失败: {ex.Message}";
+                }
+                catch { }
+            }
         }
 
         /// <summary>
@@ -587,39 +641,51 @@ namespace DeepSeek_v4_for_VisualStudio.View
         /// </summary>
         private void CreateNewChat()
         {
-            // 停止当前生成
-            if (_isGenerating)
+            try
             {
-                _currentStreamingCts?.Cancel();
-                _isGenerating = false;
+                lock (_lock)
+                {
+                    // 停止当前生成
+                    if (_isGenerating)
+                    {
+                        _currentStreamingCts?.Cancel();
+                        _isGenerating = false;
+                    }
+                }
+
                 UpdateButtonsState();
-            }
 
-            // 保存当前会话
-            SaveCurrentSession();
+                // 保存当前会话
+                SaveCurrentSession();
 
-            // 创建新会话
-            _activeSession = CreateNewSessionInternal();
-            if (_sessionsContainer == null)
-                _sessionsContainer = new SessionsContainer { SolutionPath = _solutionPath ?? "(unsaved)" };
-            _sessionsContainer.Sessions.Add(_activeSession);
-            _sessionsContainer.ActiveSessionId = _activeSession.Id;
+                // 创建新会话
+                _activeSession = CreateNewSessionInternal();
+                if (_sessionsContainer == null)
+                    _sessionsContainer = new SessionsContainer { SolutionPath = _solutionPath ?? "(unsaved)" };
+                _sessionsContainer.Sessions.Add(_activeSession);
+                _sessionsContainer.ActiveSessionId = _activeSession.Id;
 
-            // 清空并添加欢迎语
-            _messages.Clear();
-            _conversationHistory.Clear();
-            _messagesHtml.Clear();
-            _lastRenderedMessagesLength = 0;
+                lock (_lock)
+                {
+                    // 清空并添加欢迎语
+                    _messages.Clear();
+                    _conversationHistory.Clear();
+                    _messagesHtml.Clear();
+                    _lastRenderedMessagesLength = 0;
+                }
 
-            var welcomeMsg = new ChatMessage
-            {
-                Role = "assistant",
-                Content = WelcomeMessage,
-                Timestamp = DateTime.Now,
-                IsRendered = true,
-            };
-            _messages.Add(welcomeMsg);
-            _activeSession.Messages.Add(welcomeMsg);
+                var welcomeMsg = new ChatMessage
+                {
+                    Role = "assistant",
+                    Content = WelcomeMessage,
+                    Timestamp = DateTime.Now,
+                    IsRendered = true,
+                };
+                lock (_lock)
+                {
+                    _messages.Add(welcomeMsg);
+                }
+                _activeSession.Messages.Add(welcomeMsg);
 
             // 更新下拉框
             PopulateSessionComboBox();
@@ -630,6 +696,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
             // 重置搜索额度状态（新会话可能额度已恢复）
             _webSearchService?.ResetQuotaState();
 
+            // 清空附件列表
+            ClearAttachedFiles();
+
             // 刷新浏览器
             RebuildMessagesHtml();
             _browserInitialized = false;
@@ -637,6 +706,12 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             InputTextBox.Focus();
             Logger.Info("创建新会话");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"CreateNewChat 异常: {ex.Message}", ex);
+                StatusLabel.Text = $"创建新会话失败: {ex.Message}";
+            }
         }
 
         /// <summary>
@@ -644,61 +719,89 @@ namespace DeepSeek_v4_for_VisualStudio.View
         /// </summary>
         private void DeleteCurrentSession()
         {
-            if (_sessionsContainer == null || _activeSession == null) return;
-            if (_sessionsContainer.Sessions.Count <= 1)
+            try
             {
-                // 最后一个会话不能删除，清空即可
-                ClearCurrentSessionMessages();
-                return;
-            }
-
-            if (_isGenerating)
-            {
-                _currentStreamingCts?.Cancel();
-                _isGenerating = false;
-                UpdateButtonsState();
-            }
-
-            string deletedTitle = _activeSession.Title;
-            _sessionsContainer.Sessions.Remove(_activeSession);
-
-            // 切换到第一个会话
-            _activeSession = _sessionsContainer.Sessions.FirstOrDefault();
-            _sessionsContainer.ActiveSessionId = _activeSession?.Id;
-
-            // 加载新会话消息
-            _messages.Clear();
-            _conversationHistory.Clear();
-            _messagesHtml.Clear();
-            _lastRenderedMessagesLength = 0;
-
-            if (_activeSession != null)
-            {
-                foreach (var msg in _activeSession.Messages)
+                if (_sessionsContainer == null || _activeSession == null) return;
+                if (_sessionsContainer.Sessions.Count <= 1)
                 {
-                    msg.IsStreaming = false;
-                    _messages.Add(msg);
-                    if (msg.Role is "user" or "assistant")
+                    // 最后一个会话不能删除，清空即可
+                    ClearCurrentSessionMessages();
+                    return;
+                }
+
+                lock (_lock)
+                {
+                    if (_isGenerating)
                     {
-                        _conversationHistory.Add(new ChatApiMessage
-                        {
-                            Role = msg.Role,
-                            Content = msg.Content ?? string.Empty,
-                        });
+                        _currentStreamingCts?.Cancel();
+                        _isGenerating = false;
                     }
                 }
+
+                UpdateButtonsState();
+
+                string deletedTitle = _activeSession.Title;
+                _sessionsContainer.Sessions.Remove(_activeSession);
+
+                // 切换到第一个会话
+                _activeSession = _sessionsContainer.Sessions.FirstOrDefault();
+                _sessionsContainer.ActiveSessionId = _activeSession?.Id;
+
+                lock (_lock)
+                {
+                    // 加载新会话消息
+                    _messages.Clear();
+                    _conversationHistory.Clear();
+                    _messagesHtml.Clear();
+                    _lastRenderedMessagesLength = 0;
+                }
+
+                if (_activeSession != null)
+                {
+                    foreach (var msg in _activeSession.Messages)
+                    {
+                        msg.IsStreaming = false;
+                        lock (_lock) { _messages.Add(msg); }
+                        if (msg.Role is "user" or "assistant")
+                        {
+                            // 对用户消息，重构完整内容（用户文本 + 文件内容）发送给 AI
+                            string apiContent = msg.Content ?? string.Empty;
+                            if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                            {
+                                string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                                if (!string.IsNullOrEmpty(fileContext))
+                                {
+                                    apiContent = fileContext + "\n" + apiContent;
+                                }
+                            }
+                            lock (_lock)
+                            {
+                                _conversationHistory.Add(new ChatApiMessage
+                                {
+                                    Role = msg.Role,
+                                    Content = apiContent,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // 更新下拉框并持久化
+                PopulateSessionComboBox();
+                ChatPersistenceService.SaveSessions(_solutionPath, _sessionsContainer);
+
+                // 刷新浏览器
+                RebuildMessagesHtml();
+                _browserInitialized = false;
+                UpdateBrowser();
+
+                Logger.Info($"已删除会话: {deletedTitle}");
             }
-
-            // 更新下拉框并持久化
-            PopulateSessionComboBox();
-            ChatPersistenceService.SaveSessions(_solutionPath, _sessionsContainer);
-
-            // 刷新浏览器
-            RebuildMessagesHtml();
-            _browserInitialized = false;
-            UpdateBrowser();
-
-            Logger.Info($"已删除会话: {deletedTitle}");
+            catch (Exception ex)
+            {
+                Logger.Error($"DeleteCurrentSession 异常: {ex.Message}", ex);
+                StatusLabel.Text = $"删除会话失败: {ex.Message}";
+            }
         }
 
         /// <summary>
@@ -706,34 +809,51 @@ namespace DeepSeek_v4_for_VisualStudio.View
         /// </summary>
         private void ClearCurrentSessionMessages()
         {
-            _messages.Clear();
-            _conversationHistory.Clear();
-            _messagesHtml.Clear();
-            _lastRenderedMessagesLength = 0;
-
-            if (_activeSession != null)
+            try
             {
-                _activeSession.Messages.Clear();
-                _activeSession.Title = "新对话";
+                lock (_lock)
+                {
+                    _messages.Clear();
+                    _conversationHistory.Clear();
+                    _messagesHtml.Clear();
+                    _lastRenderedMessagesLength = 0;
+                }
+
+                if (_activeSession != null)
+                {
+                    _activeSession.Messages.Clear();
+                    _activeSession.Title = "新对话";
+                }
+
+                var welcomeMsg = new ChatMessage
+                {
+                    Role = "assistant",
+                    Content = WelcomeMessage,
+                    Timestamp = DateTime.Now,
+                    IsRendered = true,
+                };
+                lock (_lock)
+                {
+                    _messages.Add(welcomeMsg);
+                }
+                _activeSession?.Messages.Add(welcomeMsg);
+
+                PopulateSessionComboBox();
+                SaveCurrentSession();
+
+                // 清空附件列表
+                ClearAttachedFiles();
+
+                RebuildMessagesHtml();
+                _browserInitialized = false;
+                UpdateBrowser();
+                Logger.Info("已清空当前会话消息");
             }
-
-            var welcomeMsg = new ChatMessage
+            catch (Exception ex)
             {
-                Role = "assistant",
-                Content = WelcomeMessage,
-                Timestamp = DateTime.Now,
-                IsRendered = true,
-            };
-            _messages.Add(welcomeMsg);
-            _activeSession?.Messages.Add(welcomeMsg);
-
-            PopulateSessionComboBox();
-            SaveCurrentSession();
-
-            RebuildMessagesHtml();
-            _browserInitialized = false;
-            UpdateBrowser();
-            Logger.Info("已清空当前会话消息");
+                Logger.Error($"ClearCurrentSessionMessages 异常: {ex.Message}", ex);
+                StatusLabel.Text = $"清空消息失败: {ex.Message}";
+            }
         }
 
         #endregion
@@ -744,7 +864,14 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private async void SendMessage()
         #pragma warning restore VSTHRD100
         {
-            if (_isGenerating) return;
+            lock (_lock)
+            {
+                if (_isGenerating) return;
+                _isGenerating = true;
+            }
+
+            try
+            {
 
             var userText = InputTextBox.Text?.Trim();
             if (string.IsNullOrEmpty(userText))
@@ -773,15 +900,54 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             InputTextBox.Text = string.Empty;
 
+            // ── 解析上传的文件 ──
+            string fileContext = string.Empty;
+            List<string> attachedFileNames = new();
+            List<FileParseResult> parseResults = new();
+
+            if (_attachedFilePaths.Count > 0)
+            {
+                StatusLabel.Text = "正在解析文件…";
+                parseResults = await FileParserService.ParseFilesAsync(_attachedFilePaths);
+                attachedFileNames = parseResults
+                    .Where(r => r.Success)
+                    .Select(r => r.FileName)
+                    .ToList();
+
+                fileContext = FileParserService.FormatParseResultsForContext(parseResults);
+                if (!string.IsNullOrEmpty(fileContext))
+                {
+                    Logger.Info($"文件解析完成: {attachedFileNames.Count} 个文件");
+                }
+            }
+
+            // ── 构建完整的用户消息内容 ──
+            // UI 显示内容：仅用户原始文本（文件内容通过可折叠块展示）
+            string userDisplayContent = userText!;
+            // AI 上下文内容：文件内容 + 用户文本
+            string fullUserContent = userText!;
+            if (!string.IsNullOrEmpty(fileContext))
+            {
+                fullUserContent = fileContext + "\n" + userText!;
+            }
+
             // ── 添加用户消息 ──
             var userMsg = new ChatMessage
             {
                 Role = "user",
-                Content = userText!,
+                Content = userDisplayContent,
+                AttachedFileNames = attachedFileNames,
+                AttachedFiles = parseResults,
                 Timestamp = DateTime.Now,
             };
-            _messages.Add(userMsg);
-            _conversationHistory.Add(new ChatApiMessage { Role = "user", Content = userText! });
+            lock (_lock)
+            {
+                _messages.Add(userMsg);
+                _conversationHistory.Add(new ChatApiMessage { Role = "user", Content = fullUserContent });
+            }
+
+            // ── 清空附件列表 ──
+            ClearAttachedFiles();
 
             // 自动设置会话标题（使用第一条用户消息）
             AutoTitleSession();
@@ -797,10 +963,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 IsRendered = false,
             };
             _messages.Add(assistantMsg);
-            int assistantMsgIndex = _messages.Count - 1;
+            int assistantMsgIndex;
+            lock (_lock)
+            {
+                _messages.Add(assistantMsg);
+                assistantMsgIndex = _messages.Count - 1;
+            }
 
             // ── 批量构建 HTML（用户消息 + 助手占位），仅调用一次 UpdateBrowser 避免竞态重复渲染 ──
-            AddMessagesHtml("user", userText!);
+            // 对于用户消息，只显示用户的原始文本 + 可折叠文件块
+            AddMessagesHtml("user", userDisplayContent, null, parseResults);
             AddMessagesHtml("assistant", string.Empty);
             UpdateBrowser();
 
@@ -923,8 +1095,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     assistantMsg.IsStreaming = false;
                     await UpdateStreamingMessageAsync(assistantMsgIndex,
                         assistantMsg.Content, assistantMsg.ReasoningContent, isComplete: true);
-                    _messages.Remove(assistantMsg); // 不保存到对话记录
-                    _isGenerating = false;
+                    lock (_lock) { _messages.Remove(assistantMsg); } // 不保存到对话记录
+                    lock (_lock) { _isGenerating = false; }
                     UpdateButtonsState();
                     StatusLabel.Text = "⚠️ 百度 API Key 无效";
                     _currentStreamingCts?.Cancel();
@@ -1044,7 +1216,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 assistantMsg.IsStreaming = false;
                 await UpdateStreamingMessageAsync(assistantMsgIndex,
                     assistantMsg.Content, assistantMsg.ReasoningContent, isComplete: true);
-                _messages.Remove(assistantMsg); // 不保存到对话记录
+                lock (_lock) { _messages.Remove(assistantMsg); } // 不保存到对话记录
             }
             catch (OperationCanceledException)
             {
@@ -1061,7 +1233,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 assistantMsg.IsStreaming = false;
                 await UpdateStreamingMessageAsync(assistantMsgIndex,
                     assistantMsg.Content, assistantMsg.ReasoningContent, isComplete: true);
-                _messages.Remove(assistantMsg); // 不保存到对话记录
+                lock (_lock) { _messages.Remove(assistantMsg); } // 不保存到对话记录
             }
             catch (Exception ex)
             {
@@ -1074,11 +1246,33 @@ namespace DeepSeek_v4_for_VisualStudio.View
             finally
             {
                 assistantMsg.IsStreaming = false;
-                _isGenerating = false;
+                lock (_lock)
+                {
+                    _isGenerating = false;
+                }
                 StatusLabel.Text = string.Empty;
                 _currentStreamingCts?.Dispose();
                 _currentStreamingCts = null;
                 UpdateButtonsState();
+            }
+            }
+            catch (Exception ex)
+            {
+                // 顶层兜底：捕获任何未预期的异常
+                Logger.Error($"[Render] SendMessage 未处理异常: {ex.Message}", ex);
+                lock (_lock)
+                {
+                    _isGenerating = false;
+                }
+                _currentStreamingCts?.Dispose();
+                _currentStreamingCts = null;
+                UpdateButtonsState();
+                try
+                {
+                    await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    StatusLabel.Text = $"发生错误: {ex.Message}";
+                }
+                catch { }
             }
         }
 
@@ -1424,22 +1618,49 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         private void StopGeneration()
         {
-            _currentStreamingCts?.Cancel();
+            try
+            {
+                lock (_lock)
+                {
+                    _currentStreamingCts?.Cancel();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"StopGeneration 异常: {ex.Message}", ex);
+            }
         }
 
         #pragma warning disable VSTHRD100 // async void 用于 WPF 按钮事件处理，符合 WPF 模式
         private async void ClearConversation()
         #pragma warning restore VSTHRD100
         {
-            if (_isGenerating)
+            try
             {
-                _currentStreamingCts?.Cancel();
-                _isGenerating = false;
-                UpdateButtonsState();
-            }
+                lock (_lock)
+                {
+                    if (_isGenerating)
+                    {
+                        _currentStreamingCts?.Cancel();
+                        _isGenerating = false;
+                    }
+                }
 
-            ClearCurrentSessionMessages();
-            Logger.Info("清空对话完成");
+                UpdateButtonsState();
+
+                ClearCurrentSessionMessages();
+                Logger.Info("清空对话完成");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"ClearConversation 异常: {ex.Message}", ex);
+                try
+                {
+                    await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    StatusLabel.Text = $"清空失败: {ex.Message}";
+                }
+                catch { }
+            }
         }
 
         #endregion
@@ -1493,6 +1714,76 @@ namespace DeepSeek_v4_for_VisualStudio.View
             ClearConversation();
         }
 
+        /// <summary>
+        /// 文件上传按钮点击：打开文件选择对话框，将选中文件添加到附件列表。
+        /// </summary>
+        private void UploadButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "选择要上传的文件",
+                Filter = FileParserService.GetFileFilter(),
+                Multiselect = true,
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                foreach (string filePath in dlg.FileNames)
+                {
+                    if (!_attachedFilePaths.Contains(filePath, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (FileParserService.IsSupportedFormat(filePath))
+                        {
+                            _attachedFilePaths.Add(filePath);
+                        }
+                        else
+                        {
+                            StatusLabel.Text = $"⚠️ 不支持的文件格式: {System.IO.Path.GetExtension(filePath)}";
+                        }
+                    }
+                }
+                RefreshAttachedFilesUI();
+            }
+        }
+
+        /// <summary>
+        /// 移除单个已上传文件。
+        /// </summary>
+        private void RemoveAttachedFile_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string fileName)
+            {
+                // 根据文件名找到对应路径并移除
+                var pathToRemove = _attachedFilePaths.FirstOrDefault(
+                    p => string.Equals(System.IO.Path.GetFileName(p), fileName, StringComparison.OrdinalIgnoreCase));
+                if (pathToRemove != null)
+                {
+                    _attachedFilePaths.Remove(pathToRemove);
+                    RefreshAttachedFilesUI();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 刷新附件文件标签 UI。
+        /// </summary>
+        private void RefreshAttachedFilesUI()
+        {
+            AttachedFilesControl.ItemsSource = null;
+            AttachedFilesControl.ItemsSource = _attachedFilePaths
+                .Select(p => System.IO.Path.GetFileName(p))
+                .ToList();
+        }
+
+        /// <summary>
+        /// 清空已上传的文件列表。
+        /// </summary>
+        private void ClearAttachedFiles()
+        {
+            _attachedFilePaths.Clear();
+            RefreshAttachedFilesUI();
+        }
+
         private void SessionComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (SessionComboBox.SelectedItem is ChatSession session && session != _activeSession)
@@ -1542,34 +1833,109 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 联网搜索引擎选择变更事件。
+        /// 联网搜索开关按钮点击：切换开启/关闭，联动下拉框可见性。
+        /// </summary>
+        private void WebSearchToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 切换状态
+                if (_webSearchEngine == "Off")
+                {
+                    _webSearchEngine = "Baidu";
+                    WebSearchEngineComboBox.SelectedIndex = 0; // 默认百度
+                }
+                else
+                {
+                    _webSearchEngine = "Off";
+                }
+
+                Logger.Info($"联网搜索状态切换为: {_webSearchEngine}");
+                UpdateWebSearchToggleAppearance();
+
+                if (_webSearchEngine != "Off")
+                {
+                    ApplyWebSearchConfig();
+                }
+
+                // 提示百度未配置 Key 的情况
+                if (_webSearchEngine == "Baidu" && (_options == null || string.IsNullOrWhiteSpace(_options.BaiduApiKey)))
+                {
+                    StatusLabel.Text = "⚠️ 百度搜索需要 API Key，请在 工具→选项→DeepSeek Chat→Web Search 中配置";
+                }
+                else
+                {
+                    StatusLabel.Text = string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"WebSearchToggleButton_Click 异常: {ex.Message}", ex);
+            }
+        }
+
+
+        /// <summary>
+        /// 根据当前搜索引擎更新切换按钮的外观和 ToolTip。
+        /// </summary>
+        private void UpdateWebSearchToggleAppearance()
+        {
+            bool isOn = _webSearchEngine != "Off";
+            // 按钮颜色与 Tooltip
+            if (isOn)
+            {
+                // 保持激活色（若需区分引擎可再细化）
+                WebSearchToggleButton.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x6C, 0xAF, 0xD9));
+                WebSearchToggleButton.ToolTip = "联网搜索: 已开启 (点击关闭)";
+            }
+            else
+            {
+                WebSearchToggleButton.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x88, 0x88, 0x88));
+                WebSearchToggleButton.ToolTip = "联网搜索: 已关闭 (点击开启)";
+            }
+
+            // 下拉框可见性：开启时显示，关闭时隐藏
+            WebSearchEngineComboBox.Visibility = isOn ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+
+        /// <summary>
+        /// 联网搜索引擎选择变更事件（保留兼容，但 UI 已隐藏此控件）。
         /// </summary>
         private void WebSearchEngineComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (WebSearchEngineComboBox.SelectedIndex < 0) return;
-
-            _webSearchEngine = WebSearchEngineComboBox.SelectedIndex switch
+            try
             {
-                0 => "Off",
-                1 => "Baidu",
-                2 => "DuckDuckGo",
-                _ => "Off",
-            };
+                if (WebSearchEngineComboBox.SelectedIndex < 0) return;
 
-            Logger.Info($"联网搜索引擎切换为: {_webSearchEngine}");
+                string? selected = WebSearchEngineComboBox.SelectedItem as string;
+                string newEngine = selected switch
+                {
+                    string s when s.Contains("百度") => "Baidu",
+                    string s when s.Contains("DuckDuckGo") => "DuckDuckGo",
+                    _ => "Off"
+                };
 
-            // 热重载搜索配置（支持用户修改 API Key 后即时生效）
-            if (_webSearchEngine != "Off")
-            {
+                if (_webSearchEngine == newEngine) return; // 避免循环触发
+
+                _webSearchEngine = newEngine;
+                Logger.Info($"联网搜索引擎切换为: {_webSearchEngine}");
+                UpdateWebSearchToggleAppearance();
                 ApplyWebSearchConfig();
-            }
 
-            // 若选择了百度但未配置 API Key，提示用户
-            if (_webSearchEngine == "Baidu" && (_options == null || string.IsNullOrWhiteSpace(_options.BaiduApiKey)))
+                if (_webSearchEngine == "Baidu" && (_options == null || string.IsNullOrWhiteSpace(_options.BaiduApiKey)))
+                {
+                    StatusLabel.Text = "⚠️ 百度搜索需要 API Key，请在 工具→选项→DeepSeek Chat→Web Search 中配置";
+                }
+            }
+            catch (Exception ex)
             {
-                StatusLabel.Text = "⚠️ 百度搜索需要 API Key，请在 工具→选项→DeepSeek Chat→Web Search 中配置";
+                Logger.Error($"WebSearchEngineComboBox_SelectionChanged 异常: {ex.Message}", ex);
             }
         }
+
 
         #endregion
 

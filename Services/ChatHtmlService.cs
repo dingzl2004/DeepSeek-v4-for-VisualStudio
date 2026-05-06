@@ -114,7 +114,7 @@ img{max-width:100%}
             {
                 var msg = messages[i];
                 if (msg.Role == "user")
-                    AppendUserMessageHtml(sb, msg.Content ?? string.Empty);
+                    AppendUserMessageHtml(sb, msg.Content ?? string.Empty, msg.AttachedFiles);
                 else if (msg.Role == "assistant")
                     AppendAssistantMessageHtml(sb, msg, i);
             }
@@ -125,10 +125,10 @@ img{max-width:100%}
         /// <summary>
         /// 构建单条用户消息的 HTML 片段（用于增量追加）。
         /// </summary>
-        public static string BuildUserMessageHtml(string content)
+        public static string BuildUserMessageHtml(string content, List<FileParseResult>? attachedFiles = null)
         {
             var sb = new StringBuilder();
-            AppendUserMessageHtml(sb, content);
+            AppendUserMessageHtml(sb, content, attachedFiles);
             return sb.ToString();
         }
 
@@ -304,15 +304,73 @@ img{max-width:100%}
 
         #region Private Methods - Message HTML Builders
 
-        private static void AppendUserMessageHtml(StringBuilder sb, string content)
+        private static void AppendUserMessageHtml(StringBuilder sb, string content, List<FileParseResult>? attachedFiles = null)
         {
+            // ── 文件附件：可折叠的 &lt;details&gt; 块 ──
+            string fileBlocksHtml = string.Empty;
+            if (attachedFiles != null && attachedFiles.Count > 0)
+            {
+                var blocks = new StringBuilder();
+                blocks.Append("<div style='margin-bottom:8px;text-align:left'>");
+
+                foreach (var file in attachedFiles)
+                {
+                    string escapedFileName = System.Net.WebUtility.HtmlEncode(file.FileName);
+
+                    if (file.Success && !string.IsNullOrEmpty(file.Content))
+                    {
+                        // 文件解析成功 → 可折叠展开
+                        string lang = GetLanguageFromExtension(file.FileExtension);
+                        string escapedContent = System.Net.WebUtility.HtmlEncode(
+                            (file.Truncated && file.TruncationNote != null
+                                ? file.TruncationNote + "\n\n" + file.Content
+                                : file.Content) ?? string.Empty);
+
+                        blocks.Append("<details class='file-attachment' style='margin-bottom:4px;border:1px solid #3A5A3A;border-radius:4px;background:#1A2E1A;overflow:hidden'>");
+                        blocks.Append("<summary style='cursor:pointer;padding:4px 10px;color:#7EC87E;font-size:12px;font-weight:600;background:#253525;user-select:none;list-style:none'>");
+                        blocks.Append("&#128206; ");
+                        blocks.Append(escapedFileName);
+                        if (file.Truncated)
+                            blocks.Append(" <span style='color:#C8A84E;font-size:10px'>(已截断)</span>");
+                        blocks.Append("</summary>");
+                        blocks.Append("<div style='padding:6px 10px;max-height:400px;overflow-y:auto'>");
+                        blocks.Append("<pre style='margin:0;background:#1A1E1A;font-size:11px;line-height:1.4;max-height:380px'><code");
+                        if (!string.IsNullOrEmpty(lang))
+                            blocks.Append(" class='language-" + lang + "'");
+                        blocks.Append(">");
+                        blocks.Append(escapedContent);
+                        blocks.Append("</code></pre>");
+                        blocks.Append("</div>");
+                        blocks.Append("</details>");
+                    }
+                    else
+                    {
+                        // 文件解析失败 → 显示错误标签
+                        string errorMsg = System.Net.WebUtility.HtmlEncode(file.Error ?? "解析失败");
+                        blocks.Append("<div style='display:inline-block;background:#5C1A1A;color:#E07878;");
+                        blocks.Append("padding:3px 10px;border-radius:3px;font-size:11px;margin-bottom:3px'>");
+                        blocks.Append("&#128206; ");
+                        blocks.Append(escapedFileName);
+                        blocks.Append(" &mdash; ");
+                        blocks.Append(errorMsg);
+                        blocks.Append("</div>");
+                    }
+                }
+
+                blocks.Append("</div>");
+                fileBlocksHtml = blocks.ToString();
+            }
+
             string escaped = System.Net.WebUtility.HtmlEncode((content ?? string.Empty).Trim());
             string body = escaped.Replace("\n", "<br>");
 
             sb.Append(
                 "<div style='display:flex;justify-content:flex-end;margin-bottom:14px'>" +
-                "<div class='msg-user' style='max-width:85%;display:inline-block;text-align:left'>" +
+                "<div style='max-width:85%;text-align:left'>" +
+                fileBlocksHtml +
+                "<div class='msg-user' style='display:inline-block;text-align:left'>" +
                 "<div class='msg-body'>" + body + "</div>" +
+                "</div>" +
                 "</div>" +
                 "<div style='margin-left:10px'>" + UserAvatarHtml + "</div>" +
                 "</div>");
@@ -385,6 +443,48 @@ img{max-width:100%}
             if (string.IsNullOrWhiteSpace(reasoningContent)) return string.Empty;
             string escaped = System.Net.WebUtility.HtmlEncode(reasoningContent);
             return escaped.Replace("\n", "<br>");
+        }
+
+        /// <summary>
+        /// 根据文件扩展名获取 Markdown 代码块语言标识。
+        /// </summary>
+        private static string GetLanguageFromExtension(string extension)
+        {
+            if (string.IsNullOrWhiteSpace(extension)) return string.Empty;
+
+            return extension.ToLowerInvariant() switch
+            {
+                ".py" => "python",
+                ".cs" => "csharp",
+                ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => "cpp",
+                ".java" => "java",
+                ".js" or ".jsx" => "javascript",
+                ".ts" or ".tsx" => "typescript",
+                ".html" or ".htm" => "html",
+                ".css" => "css",
+                ".xml" or ".xaml" or ".axml" => "xml",
+                ".json" => "json",
+                ".yaml" or ".yml" => "yaml",
+                ".md" => "markdown",
+                ".sql" => "sql",
+                ".php" => "php",
+                ".rb" => "ruby",
+                ".go" => "go",
+                ".rs" => "rust",
+                ".swift" => "swift",
+                ".kt" => "kotlin",
+                ".scala" => "scala",
+                ".lua" => "lua",
+                ".sh" or ".bash" => "bash",
+                ".ps1" => "powershell",
+                ".bat" => "batch",
+                ".ini" or ".cfg" or ".conf" or ".editorconfig" => "ini",
+                ".r" => "r",
+                ".dockerfile" => "dockerfile",
+                ".cmake" => "cmake",
+                ".proto" => "protobuf",
+                _ => string.Empty,
+            };
         }
 
         /// <summary>
