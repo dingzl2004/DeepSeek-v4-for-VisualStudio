@@ -90,47 +90,20 @@ namespace DeepSeek_v4_for_VisualStudio.Settings
         [DisplayName("OCR Engine")]
         [Description("选择图像 OCR 引擎:\n" +
                      "  • Windows Built-in — 系统内置，无需配置，准确率一般\n" +
-                     "  • Tesseract.NET — 经典开源引擎，中文准确率 ≥92%\n" +
-                     "    需下载语言包 chi_sim.traineddata (~15MB)\n" +
                      "  • PaddleOCR-Sharp — 深度学习引擎，中文准确率 ≥95%\n" +
-                     "    需下载推理模型 det/rec/cls (~200MB)")]
+                     "    使用包自带 ChineseV5 本地模型，无需额外下载")]
         [TypeConverter(typeof(OcrEngineConverter))]
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public string OcrEngine { get; set; } = "Windows Built-in";
 
         [Category("OCR Settings")]
-        [DisplayName("Tesseract Language Data Path")]
-        [Description("Tesseract 语言包目录（需包含 chi_sim.traineddata 文件）。\n" +
-                     "留空则使用默认路径: {插件安装目录}\\tessdata")]
-        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
-        public string TesseractDataPath { get; set; } = string.Empty;
-
-        [Category("OCR Settings")]
-        [DisplayName("📥 Download Tesseract Language Pack")]
-        [Description("点击右侧 \"...\" 按钮，在浏览器中打开 Tesseract 中文语言包下载页面。\n" +
-                     "下载 chi_sim.traineddata 后放入上方配置的 tessdata 目录即可使用。\n" +
-                     "下载地址: https://github.com/tesseract-ocr/tessdata_best")]
+        [DisplayName("📥 PaddleOCR Model Information")]
+        [Description("PaddleOCR 现使用 Sdcb.PaddleOCR 包自带 ChineseV5 本地模型。\n" +
+                     "无需手动下载推理模型，模型文件随 NuGet 包自动部署。\n" +
+                     "GitHub: https://github.com/sdcb/Sdcb.PaddleOCR")]
         [Editor(typeof(DownloadLinkEditor), typeof(UITypeEditor))]
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
-        public string TesseractDownloadLink => "https://github.com/tesseract-ocr/tessdata_best";
-
-        [Category("OCR Settings")]
-        [DisplayName("PaddleOCR Model Path")]
-        [Description("PaddleOCR 推理模型根目录（需包含 det / rec 两个子目录，cls 可选）。\n" +
-                     "留空则使用默认路径: {插件安装目录}\\inference")]
-        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
-        public string PaddleOcrModelPath { get; set; } = string.Empty;
-
-        [Category("OCR Settings")]
-        [DisplayName("📥 Download PaddleOCR Inference Models")]
-        [Description("点击右侧 \"...\" 按钮，在浏览器中打开 PaddleOCR 模型下载页面。\n" +
-                     "下载 det/rec 推理模型后解压放入上方配置的目录即可使用。\n" +
-                     "检测模型: https://paddleocr.bj.bcebos.com/PP-OCRv4/chinese/ch_PP-OCRv4_det_infer.tar\n" +
-                     "识别模型: https://paddleocr.bj.bcebos.com/PP-OCRv4/chinese/ch_PP-OCRv4_rec_infer.tar\n" +
-                     "字典文件: https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppocr/utils/ppocr_keys_v1.txt")]
-        [Editor(typeof(DownloadLinkEditor), typeof(UITypeEditor))]
-        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
-        public string PaddleOcrDownloadLink => "https://github.com/PaddlePaddle/PaddleOCR/blob/main/doc/doc_ch/models_list.md";
+        public string PaddleOcrInfoLink => "https://github.com/sdcb/Sdcb.PaddleOCR";
     }
 
     /// <summary>
@@ -170,6 +143,6 @@ namespace DeepSeek_v4_for_VisualStudio.Settings
     {
         public override bool GetStandardValuesSupported(ITypeDescriptorContext? context) => true;
         public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext? context)
-            => new(new[] { "Windows Built-in", "Tesseract.NET", "PaddleOCR-Sharp" });
+            => new(new[] { "Windows Built-in", "PaddleOCR-Sharp" });
     }
 }

@@ -188,26 +188,12 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 // 设置 OCR 引擎类型
                 OcrService.CurrentEngine = _options.OcrEngine switch
                 {
-                    "Tesseract.NET" => OcrEngineType.Tesseract,
                     "PaddleOCR-Sharp" => OcrEngineType.PaddleOCR,
                     _ => OcrEngineType.WindowsBuiltIn,
                 };
                 Logger.Info($"[OCR] 引擎类型已设置: {OcrService.CurrentEngine}");
 
-                // 设置模型路径（优先使用用户自定义路径）
-                if (!string.IsNullOrWhiteSpace(_options.TesseractDataPath))
-                {
-                    OcrService.TesseractDataPath = _options.TesseractDataPath;
-                    Logger.Info($"[OCR] 用户自定义 Tesseract 路径: {_options.TesseractDataPath}");
-                }
-
-                if (!string.IsNullOrWhiteSpace(_options.PaddleOcrModelPath))
-                {
-                    OcrService.PaddleOcrModelPath = _options.PaddleOcrModelPath;
-                    Logger.Info($"[OCR] 用户自定义 PaddleOCR 路径: {_options.PaddleOcrModelPath}");
-                }
-
-                // 设置插件根目录（用于默认模型路径）
+                // 设置插件根目录（用于 DLL 搜索路径）
                 if (_package != null)
                 {
                     try
