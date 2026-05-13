@@ -61,6 +61,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         private readonly List<ChatMessage> _messages = new();
         private readonly ConversationContextManager _contextManager = new();
+
+        // ── 树状对话结构（替代旧线性 _messages + _assistantVersionHistory）──
+        private ConversationTree? _tree;
+
         private RagService? _ragService;
         private ContextCompressorService? _compressorService;
         private bool _isGenerating;
@@ -74,6 +78,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private SessionsContainer? _sessionsContainer;
         private ChatSession? _activeSession;
 
+        // ── 防止重复释放 ──
+        private bool _disposed;
+
         // ── 增量渲染状态（对标 Turbo ucChat） ──
         private bool _browserInitialized;
         private bool _webViewInitialized;
@@ -83,11 +90,77 @@ namespace DeepSeek_v4_for_VisualStudio.View
         // ── 线程安全 ──
         private readonly object _lock = new();
 
+        // ── AI 自动标题生成 ──
+        /// <summary>是否等待 AI 生成会话标题（首轮对话完成后触发）</summary>
+        private bool _pendingAiTitle;
+        /// <summary>第一条用户消息内容（用于 AI 摘要的输入）</summary>
+        private string? _firstUserMessageForTitle;
+
         // ── 消息版本管理（重试/编辑功能） ──
         // Key: 用户消息索引，Value: 该用户消息对应的所有助手回复版本列表
+        // [Obsolete] 树状结构使用 ConversationTree 替代。保留以兼容旧版加载。
         private readonly Dictionary<int, List<ChatMessage>> _assistantVersionHistory = new();
         // Key: 用户消息索引，Value: 当前显示的版本索引（0-based）
+        // [Obsolete] 树状结构使用 ConversationTree 替代。
         private readonly Dictionary<int, int> _activeVersionIndex = new();
+
+        // ── 树状结构辅助 ──
+
+        /// <summary>
+        /// 确保 _tree 已初始化（懒初始化）。
+        /// </summary>
+        private ConversationTree EnsureTree()
+        {
+            if (_tree == null)
+            {
+                _tree = new ConversationTree();
+                Logger.Info("[Tree] ConversationTree 已初始化");
+            }
+            return _tree;
+        }
+
+        /// <summary>
+        /// 从活跃路径同步 _messages 列表（不改变渲染状态）。
+        /// 用于普通消息追加后保持 _messages 与树同步。
+        /// </summary>
+        private void SyncMessagesFromTree()
+        {
+            if (_tree == null) return;
+            lock (_lock)
+            {
+                _messages.Clear();
+                var msgs = _tree.GetActiveMessages();
+                _messages.AddRange(msgs);
+            }
+        }
+
+        /// <summary>
+        /// 从树重建消息列表并强制下次全量刷新浏览器。
+        /// 用于分支切换或编辑/重试分叉（后续消息全部改变）。
+        /// </summary>
+        private void RebuildFromTree()
+        {
+            SyncMessagesFromTree();
+            _messagesHtml.Clear();
+            _lastRenderedMessagesLength = 0;
+            _browserInitialized = false;
+        }
+
+        /// <summary>
+        /// 通过活跃路径中的消息索引查找对应的 ConvNode。
+        /// msgIndex 是当前 _messages 列表中的索引。
+        /// </summary>
+        private ConvNode? GetConvNodeByMessageIndex(int msgIndex)
+        {
+            if (_tree == null) return null;
+            lock (_lock)
+            {
+                if (msgIndex < 0 || msgIndex >= _messages.Count) return null;
+                var msg = _messages[msgIndex];
+                if (string.IsNullOrEmpty(msg.NodeId)) return null;
+                return _tree.FindNode(msg.NodeId);
+            }
+        }
 
         // ── 文件变更历史追踪（重试/编辑前回退用） ──
         // Key: 用户消息索引，Value: 该轮对话中修改的文件及其原始/新内容
@@ -640,7 +713,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 用户关闭解决方案时：保存当前对话并清空。
+        /// 用户关闭解决方案时：保存当前对话，切换到无解决方案状态。
+        /// 复用 LoadAndShowAsync 以避免每次关闭都创建新的空会话。
         /// </summary>
         private void OnSolutionClosed()
         {
@@ -650,22 +724,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
             {
                 try
                 {
-                    // 保存当前对话
+                    // 保存当前解决方案的对话
                     SaveCurrentSession();
 
-                    // 清空
+                    // 切换到无解决方案状态
                     _solutionPath = null;
-                    _sessionsContainer = ChatPersistenceService.LoadSessions(null);
-                    _activeSession = CreateNewSessionInternal();
-                    _sessionsContainer.Sessions.Add(_activeSession);
-                    _sessionsContainer.ActiveSessionId = _activeSession.Id;
 
-                    await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    // ── 重置浏览器状态，切换时强制全量刷新 ──
+                    _browserInitialized = false;
 
-                    _messages.Clear();
-                    _contextManager.Clear();
-                    _messagesHtml.Clear();
-                    _lastRenderedMessagesLength = 0;
+                    await LoadAndShowAsync();
 
                     Logger.Info("[会话] 对话已清空（解决方案已关闭）");
                 }
@@ -704,42 +772,78 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _messages.Clear();
             _contextManager.Clear();
 
-            if (_activeSession.Messages.Count > 0)
-            {
-                Logger.Info($"[Render] LoadConversation: 从会话 '{_activeSession.Title}' 加载了 {_activeSession.Messages.Count} 条消息");
+            bool hasData = _activeSession.Messages.Count > 0
+                        || _activeSession.ApiHistory.Count > 0
+                        || !string.IsNullOrWhiteSpace(_activeSession.TreeDataJson);
 
-                // ── 优先使用 ApiHistory 恢复完整上下文（含 tool 消息） ──
-                if (_activeSession.ApiHistory.Count > 0)
+            if (hasData)
+            {
+                Logger.Info($"[Render] LoadConversation: 从会话 '{_activeSession.Title}' 加载数据 "
+                    + $"(messages={_activeSession.Messages.Count}, apiHistory={_activeSession.ApiHistory.Count}, "
+                    + $"hasTree={!string.IsNullOrWhiteSpace(_activeSession.TreeDataJson)})");
+
+                // ── 优先从 TreeData 恢复树状结构 ──
+                bool treeLoaded = false;
+                if (_activeSession.DataVersion >= 2 && !string.IsNullOrWhiteSpace(_activeSession.TreeDataJson))
                 {
-                    _contextManager.RestoreFullContext(_activeSession.ApiHistory);
-                }
-                else
-                {
-                    // 回退：从 UI 消息列表重建（旧版会话兼容）
-                    foreach (var msg in _activeSession.Messages)
+                    try
                     {
-                        msg.IsStreaming = false;
-                        if (msg.Role is "user" or "assistant")
+                        var treeData = System.Text.Json.JsonSerializer.Deserialize<TreePersistenceData>(
+                            _activeSession.TreeDataJson,
+                            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+                        if (treeData != null)
                         {
-                            string apiContent = msg.Content ?? string.Empty;
-                            if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
-                            {
-                                string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
-                                if (!string.IsNullOrEmpty(fileContext))
-                                    apiContent = fileContext + "\n" + apiContent;
-                            }
-                            if (msg.Role == "user")
-                                _contextManager.AddUserMessage(apiContent);
-                            else
-                                _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
+                            _tree = ConversationTree.Deserialize(treeData);
+                            SyncMessagesFromTree();
+                            RebuildContextFromTree();
+                            treeLoaded = true;
+                            Logger.Info($"[Tree] LoadConversation 从 TreeData 恢复 (节点数: {treeData.Nodes.Count})");
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"[Tree] LoadConversation TreeData 反序列化失败，回退: {ex.Message}");
                     }
                 }
 
-                foreach (var msg in _activeSession.Messages)
+                if (!treeLoaded)
                 {
-                    msg.IsStreaming = false;
-                    _messages.Add(msg);
+                    // ── 优先使用 ApiHistory 恢复完整上下文（含 tool 消息） ──
+                    if (_activeSession.ApiHistory.Count > 0)
+                    {
+                        _contextManager.RestoreFullContext(_activeSession.ApiHistory);
+                    }
+                    else
+                    {
+                        // 回退：从 UI 消息列表重建（旧版会话兼容）
+                        foreach (var msg in _activeSession.Messages)
+                        {
+                            msg.IsStreaming = false;
+                            if (msg.Role is "user" or "assistant")
+                            {
+                                string apiContent = msg.Content ?? string.Empty;
+                                if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                                {
+                                    string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                                    if (!string.IsNullOrEmpty(fileContext))
+                                        apiContent = fileContext + "\n" + apiContent;
+                                }
+                                if (msg.Role == "user")
+                                    _contextManager.AddUserMessage(apiContent);
+                                else
+                                    _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
+                            }
+                        }
+                    }
+
+                    foreach (var msg in _activeSession.Messages)
+                    {
+                        msg.IsStreaming = false;
+                        _messages.Add(msg);
+                    }
+
+                    // ── 旧版会话迁移到树状结构 ──
+                    MigrateToTree();
                 }
             }
 
@@ -804,9 +908,13 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         /// <summary>
         /// 释放资源，取消事件订阅，保存对话。
+        /// 幂等：重复调用不会产生副作用。
         /// </summary>
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
+
             DeepSeekOptionsPage.SettingsChanged -= OnOcrSettingsChanged;
 
             // ── 取消解决方案事件订阅 ──
@@ -815,7 +923,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 _solutionEvents.Opened -= OnSolutionOpened;
                 _solutionEvents.AfterClosing -= OnSolutionClosed;
                 _solutionEventsWired = false;
-                Logger.Info("[会话] 解决方案事件监听已取消");
+                Logger.Info("[Dispose] [会话] 解决方案事件监听已取消");
             }
 
             _currentStreamingCts?.Cancel();
@@ -836,7 +944,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             // ── 清理临时上下文文件 ──
             CleanupTempContextFiles();
 
-            Logger.Info("DeepSeekChatControl 已释放");
+            Logger.Info("[Dispose] DeepSeekChatControl 已释放");
         }
 
         /// <summary>

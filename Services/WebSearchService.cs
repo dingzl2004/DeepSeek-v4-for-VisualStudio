@@ -208,6 +208,230 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         }
 
         /// <summary>
+        /// 从文本中提取所有 HTTP/HTTPS URL。
+        /// 支持智能截断：当 URL 末尾紧跟中文等自然语言文字时自动分离。
+        /// </summary>
+        /// <param name="text">待提取的文本</param>
+        /// <returns>去重后的 URL 列表</returns>
+        public static List<string> ExtractUrls(string text)
+        {
+            var urls = new List<string>();
+            if (string.IsNullOrWhiteSpace(text))
+                return urls;
+
+            // 匹配 http:// 或 https:// 开头的 URL
+            // 在空白字符、常见标点以及中文标点处停止
+            var matches = Regex.Matches(text, @"https?://[^\s<>""'，。！？；：、【】《》（）\u3000]+", RegexOptions.IgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match match in matches)
+            {
+                string rawUrl = match.Value.TrimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}', '>');
+
+                // 智能截断：检测 URL 末尾是否被自然语言文字（如中文）粘连
+                rawUrl = TrimTrailingNaturalLanguage(rawUrl);
+
+                // 去掉末尾可能被误匹配的 Markdown 或标点
+                if (Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri)
+                    && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    string normalizedUrl = uri.ToString();
+                    if (seen.Add(normalizedUrl))
+                        urls.Add(normalizedUrl);
+                }
+            }
+
+            return urls;
+        }
+
+        /// <summary>
+        /// 智能截断 URL 末尾粘连的自然语言文字（中/日/韩文等）。
+        /// 例如："https://example.com/path/中文问题描述" → "https://example.com/path/"
+        /// 仅在 URL 包含非 ASCII 字符且末尾出现自然语言特征时生效。
+        /// </summary>
+        private static string TrimTrailingNaturalLanguage(string url)
+        {
+            if (string.IsNullOrEmpty(url) || url.Length < 10)
+                return url;
+
+            // 快速路径：纯 ASCII URL 无需处理
+            bool hasNonAscii = false;
+            int firstNonAscii = -1;
+            for (int i = 0; i < url.Length; i++)
+            {
+                if (url[i] > 127)
+                {
+                    hasNonAscii = true;
+                    firstNonAscii = i;
+                    break;
+                }
+            }
+            if (!hasNonAscii) return url;
+
+            // 从后向前扫描，找到连续自然语言文字段的起始位置
+            int naturalLangStart = -1;
+            for (int i = url.Length - 1; i >= firstNonAscii; i--)
+            {
+                char c = url[i];
+                if (IsNaturalLanguageChar(c))
+                {
+                    naturalLangStart = i;
+                }
+                else if (c == '/' || c == '?' || c == '#')
+                {
+                    // 遇到 URL 结构分隔符，自然语言段在此之前
+                    // 检查这个分隔符前后：如果分隔符后直接是自然语言，截断到分隔符
+                    if (naturalLangStart >= 0 && i + 1 >= naturalLangStart)
+                    {
+                        // 分隔符紧邻自然语言段，URL结束于此分隔符
+                        return url.Substring(0, i);
+                    }
+                    // 否则分隔符是URL的一部分，停止扫描
+                    break;
+                }
+                else if (IsUrlSafeChar(c))
+                {
+                    // ASCII URL 安全字符，继续向前
+                    // 但如果已经发现了自然语言段，这个URL安全字符可能仍是URL的一部分
+                    if (naturalLangStart >= 0)
+                    {
+                        // URL安全字符出现在自然语言段中间，可能是URL的一部分
+                        // 继续向前扫描
+                    }
+                }
+                else
+                {
+                    // 其他字符（标点等），重置自然语言检测
+                    naturalLangStart = -1;
+                }
+            }
+
+            // 如果检测到自然语言开头，截断到它之前最近的 "/"
+            if (naturalLangStart > 0)
+            {
+                for (int i = naturalLangStart - 1; i >= 0; i--)
+                {
+                    if (url[i] == '/')
+                        return url.Substring(0, i).TrimEnd('.', ',', ';', ':', '!', '?');
+                }
+                // 没找到 "/"，截断到自然语言段开始处
+                return url.Substring(0, naturalLangStart).TrimEnd('.', ',', ';', ':', '!', '?');
+            }
+
+            return url;
+        }
+
+        /// <summary>
+        /// 判断字符是否为"自然语言"字符（中/日/韩文、阿拉伯文、泰文等非URL用途的Unicode字符）。
+        /// </summary>
+        private static bool IsNaturalLanguageChar(char c)
+        {
+            // CJK 统一表意文字 (U+4E00–U+9FFF)
+            if (c >= 0x4E00 && c <= 0x9FFF) return true;
+            // CJK 扩展 A (U+3400–U+4DBF)
+            if (c >= 0x3400 && c <= 0x4DBF) return true;
+            // 平假名 (U+3040–U+309F)
+            if (c >= 0x3040 && c <= 0x309F) return true;
+            // 片假名 (U+30A0–U+30FF)
+            if (c >= 0x30A0 && c <= 0x30FF) return true;
+            // 韩文音节 (U+AC00–U+D7AF)
+            if (c >= 0xAC00 && c <= 0xD7AF) return true;
+            // 韩文辅音/元音 (U+1100–U+11FF, U+3130–U+318F)
+            if (c >= 0x1100 && c <= 0x11FF) return true;
+            if (c >= 0x3130 && c <= 0x318F) return true;
+            // 全角字母数字/标点 (U+FF00–U+FFEF)
+            if (c >= 0xFF00 && c <= 0xFFEF) return true;
+            // 阿拉伯文 (U+0600–U+06FF)
+            if (c >= 0x0600 && c <= 0x06FF) return true;
+            // 泰文 (U+0E00–U+0E7F)
+            if (c >= 0x0E00 && c <= 0x0E7F) return true;
+            // 西里尔字母 (U+0400–U+04FF) — 俄文等
+            if (c >= 0x0400 && c <= 0x04FF) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// 判断字符是否为 URL 安全字符（ASCII 字母数字及 URL 保留字符）。
+        /// </summary>
+        private static bool IsUrlSafeChar(char c)
+        {
+            return (c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '-' || c == '_' || c == '.' || c == '~'
+                || c == '/' || c == ':' || c == '?' || c == '#'
+                || c == '[' || c == ']' || c == '@'
+                || c == '!' || c == '$' || c == '&' || c == '\''
+                || c == '(' || c == ')' || c == '*' || c == '+'
+                || c == ',' || c == ';' || c == '=' || c == '%';
+        }
+
+        /// <summary>
+        /// 批量抓取多个 URL 的网页内容，并格式化为上下文文本。
+        /// 这是"尽力而为"的操作：单个 URL 失败不影响其他 URL。
+        /// </summary>
+        /// <param name="urls">待抓取的 URL 列表</param>
+        /// <param name="ct">取消令牌</param>
+        /// <param name="maxFetchCount">最多抓取的 URL 数量（默认 5）</param>
+        /// <param name="maxContentLength">单个页面内容最大字符数（默认 2000）</param>
+        /// <returns>格式化的链接上下文文本，如果没有成功抓取到内容则返回空字符串</returns>
+        public async Task<string> FetchUrlContextAsync(
+            List<string> urls,
+            CancellationToken ct = default,
+            int maxFetchCount = 5,
+            int maxContentLength = 2000)
+        {
+            if (urls == null || urls.Count == 0)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            int fetchedCount = 0;
+
+            foreach (string url in urls)
+            {
+                if (fetchedCount >= maxFetchCount || ct.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    string? content = await FetchWebPageContentAsync(url, ct);
+                    if (!string.IsNullOrWhiteSpace(content))
+                    {
+                        fetchedCount++;
+                        // 截断过长内容
+                        string truncated = content.Length > maxContentLength
+                            ? content.Substring(0, maxContentLength) + "..."
+                            : content;
+
+                        sb.AppendLine($"--- 链接 [{fetchedCount}]: {url} ---");
+                        sb.AppendLine(truncated);
+                        sb.AppendLine();
+                        Logger.Info($"链接内容抓取成功 ({url}): {truncated.Length} 字符");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info($"链接内容抓取跳过 ({url}): {ex.Message}");
+                }
+            }
+
+            if (fetchedCount == 0)
+                return string.Empty;
+
+            // 添加头部说明
+            var header = new StringBuilder();
+            header.AppendLine("=== 用户消息中的链接内容 ===");
+            header.AppendLine($"共抓取 {fetchedCount} 个链接的内容：");
+            header.AppendLine();
+            header.Append(sb.ToString());
+            header.AppendLine("=== 链接内容结束 ===");
+            header.AppendLine("请基于以上链接内容，结合用户的问题进行回答。");
+
+            return header.ToString();
+        }
+
+        /// <summary>
         /// 重置百度额度耗尽标记（新会话开始时调用）。
         /// </summary>
         public void ResetQuotaState()

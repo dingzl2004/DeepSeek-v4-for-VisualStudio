@@ -199,8 +199,9 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// Markdown 渲染后的 HTML 内容（带深色主题 CSS）。
         /// 由 MarkdownRenderService 在流式完成后生成。
         /// 为空时表示尚未渲染或正在流式传输中。
-        /// 注意：此属性较大（~60KB），不通过 RPC 同步到 UI，仅用于本地持久化。
+        /// 注意：此属性较大（~60KB），不参与持久化，由 UI 重新渲染。
         /// </summary>
+        [JsonIgnore]
         public string HtmlContent
         {
             get => _htmlContent;
@@ -210,8 +211,9 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// <summary>
         /// data:text/html;base64,... 格式的 Data URI，可直接绑定到 WebView2.Source。
         /// 由 MarkdownRenderService.ConvertToDataUri() 生成。
-        /// 注意：此属性较大（~60KB），不通过 RPC 同步到 UI，仅用于本地持久化。
+        /// 注意：此属性较大（~60KB），不参与持久化，由 UI 重新渲染。
         /// </summary>
+        [JsonIgnore]
         public string HtmlDataUri
         {
             get => _htmlDataUri;
@@ -264,21 +266,27 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// 消息组 ID，用于关联同一轮对话的用户消息和多个助手回复版本。
         /// 用户消息和其对应的第一个助手回复共享同一个 GroupId。
         /// 重试/编辑后产生的新助手回复使用新的 GroupId。
+        /// [Obsolete] 树状结构使用 NodeId 替代。
         /// </summary>
+        [Obsolete("使用 NodeId 替代。树状结构中分支通过 ConvNode 管理。")]
         [DataMember]
         public string MessageGroupId { get; set; } = string.Empty;
 
         /// <summary>
         /// 当前助手消息在其版本组中的索引（从 1 开始）。
         /// 仅对 Role == "assistant" 的消息有意义。
+        /// [Obsolete] 树状结构使用 SiblingIndex 替代。
         /// </summary>
+        [Obsolete("使用 SiblingIndex 替代。树状结构中分支通过兄弟节点管理。")]
         [DataMember]
         public int VersionIndex { get; set; } = 1;
 
         /// <summary>
         /// 助手消息版本组中的总版本数。
         /// 仅对 Role == "assistant" 的消息有意义。
+        /// [Obsolete] 树状结构使用 SiblingCount 替代。
         /// </summary>
+        [Obsolete("使用 SiblingCount 替代。")]
         [DataMember]
         public int TotalVersions { get; set; } = 1;
 
@@ -286,9 +294,42 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// 用户消息的原始内容（编辑前的内容）。
         /// 仅当用户消息被编辑过后才设置此属性。
         /// 仅对 Role == "user" 的消息有意义。
+        /// [Obsolete] 树状结构中，原始消息保留在旧分支的兄弟节点中。
         /// </summary>
+        [Obsolete("树状结构中，原始消息保留在兄弟节点中。")]
         [DataMember]
         public string? OriginalContent { get; set; }
+
+        // ======== 树状结构新增字段 ========
+
+        /// <summary>
+        /// 关联的对话树节点 ID (ConvNode.Id)。
+        /// 用于从消息反向定位到树节点。
+        /// </summary>
+        [DataMember]
+        public string NodeId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 在兄弟节点中的显示位置（1-based）。
+        /// 仅当 SiblingCount > 1 时有意义。
+        /// </summary>
+        [DataMember]
+        public int SiblingIndex { get; set; } = 1;
+
+        /// <summary>
+        /// 兄弟节点总数。>1 时表示此处有分叉，应渲染 <> 导航按钮。
+        /// </summary>
+        [DataMember]
+        public int SiblingCount { get; set; } = 1;
+
+        /// <summary>
+        /// 分叉原因："edit"（编辑用户消息产生）或 "retry"（重试助手回复产生）。
+        /// 决定 <> 导航按钮放在用户气泡下还是 AI 气泡下：
+        /// - "edit" → 用户气泡下方（分叉点在用户消息）
+        /// - "retry" → AI气泡下方（分叉点在助手消息）
+        /// </summary>
+        [DataMember]
+        public string? ForkReason { get; set; }
 
         /// <summary>
         /// 指示 Content 是否已经是渲染好的 HTML（而非 Markdown）。
@@ -344,6 +385,22 @@ namespace DeepSeek_v4_for_VisualStudio.Models
 
         [DataMember]
         public DateTime LastActiveAt { get; set; } = DateTime.Now;
+
+        // ======== 树状结构持久化字段（版本 2）========
+
+        /// <summary>
+        /// 树结构的 JSON 序列化数据。
+        /// 如果此字段非空，优先从树结构恢复对话；否则回退到 Messages/ApiHistory。
+        /// </summary>
+        [DataMember]
+        public string? TreeDataJson { get; set; }
+
+        /// <summary>
+        /// 数据格式版本号：1 = 旧线性格式, 2 = 树状结构。
+        /// 用于加载时判断是否需要迁移。
+        /// </summary>
+        [DataMember]
+        public int DataVersion { get; set; } = 1;
     }
 
     /// <summary>

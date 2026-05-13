@@ -131,6 +131,30 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 else
                     fullUserContent = userText ?? string.Empty;
 
+                // ── 用户消息中包含链接时，主动抓取链接内容并注入上下文 ──
+                string urlContext = string.Empty;
+                if (!string.IsNullOrEmpty(userText))
+                {
+                    var urls = WebSearchService.ExtractUrls(userText);
+                    if (urls.Count > 0 && _webSearchService != null)
+                    {
+                        StatusLabel.Text = "正在访问链接…";
+                        try
+                        {
+                            urlContext = await _webSearchService.FetchUrlContextAsync(urls, CancellationToken.None);
+                            if (!string.IsNullOrEmpty(urlContext))
+                            {
+                                fullUserContent = urlContext + "\n\n用户问题：\n" + fullUserContent;
+                                Logger.Info($"链接内容已注入上下文 ({urls.Count} 个链接)");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Info($"链接抓取失败: {ex.Message}");
+                        }
+                    }
+                }
+
                 // @agent 显式路由
                 string agentRoutedUserText = userText ?? string.Empty;
                 AgentRoutingResult? explicitRoute = null;
@@ -169,7 +193,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         };
                         lock (_lock)
                         {
-                            _messages.Add(agentUserMsg);
+                            // ── 树状结构 ──
+                            var tree = EnsureTree();
+                            tree.AddChildMessage(agentUserMsg);
+                            SyncMessagesFromTree();
                             _contextManager.AddUserMessage(fullUserContent);
                         }
                         int capturedUserMsgIndex = _messages.Count - 1;
@@ -229,7 +256,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 };
                 lock (_lock)
                 {
-                    _messages.Add(userMsg);
+                    // ── 树状结构：通过 Tree 添加用户消息 ──
+                    var tree = EnsureTree();
+                    tree.AddChildMessage(userMsg);
+                    SyncMessagesFromTree();
 
                     if (!string.IsNullOrEmpty(skillInstructions))
                     {
@@ -266,8 +296,18 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 int assistantMsgIndex;
                 lock (_lock)
                 {
-                    _messages.Add(assistantMsg);
-                    assistantMsgIndex = _messages.Count - 1;
+                    // ── 树状结构：通过 Tree 添加助手消息 ──
+                    if (_tree != null)
+                    {
+                        _tree.AddChildMessage(assistantMsg);
+                        SyncMessagesFromTree();
+                        assistantMsgIndex = _messages.Count - 1;
+                    }
+                    else
+                    {
+                        _messages.Add(assistantMsg);
+                        assistantMsgIndex = _messages.Count - 1;
+                    }
                 }
 
                 AddMessagesHtml("user", userDisplayContent, null, parseResults);
@@ -566,6 +606,24 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
                     _contextManager.AddAssistantMessage(contentBuffer.ToString(), reasoningBuffer.Length > 0 ? reasoningBuffer.ToString() : null);
 
+                    // ── AI 自动生成会话标题（首轮对话完成后触发） ──
+                    if (_pendingAiTitle && !string.IsNullOrWhiteSpace(_firstUserMessageForTitle))
+                    {
+                        var capturedFirstUserMsg = _firstUserMessageForTitle;
+                        var capturedFirstAssistantReply = contentBuffer.ToString();
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await GenerateAiTitleAsync(capturedFirstUserMsg, capturedFirstAssistantReply);
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Warn($"[AI标题] 异步生成异常: {ex.Message}");
+                            }
+                        });
+                    }
+
                     var capturedMsg = assistantMsg;
                     _ = Task.Run(() =>
                     {
@@ -699,7 +757,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         private void StopGeneration()
         {
-            try { lock (_lock) { _currentStreamingCts?.Cancel(); } }
+            try
+            {
+                lock (_lock)
+                {
+                    _currentStreamingCts?.Cancel();
+                    _isGenerating = false;
+                }
+                UpdateButtonsState();
+                StatusLabel.Text = "已停止";
+            }
             catch (Exception ex) { Logger.Error($"StopGeneration 异常: {ex.Message}", ex); }
         }
 
@@ -735,6 +802,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             StopButton.Visibility = _isGenerating ? Visibility.Visible : Visibility.Collapsed;
             SendButton.Visibility = _isGenerating ? Visibility.Collapsed : Visibility.Visible;
             InputTextBox.IsReadOnly = _isGenerating;
+            ClearButton.IsEnabled = !_isGenerating;
         }
 
         #endregion

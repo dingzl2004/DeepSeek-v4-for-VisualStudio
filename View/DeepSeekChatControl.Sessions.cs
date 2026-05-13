@@ -1,9 +1,11 @@
 using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Services;
 using DeepSeek_v4_for_VisualStudio.Utils;
+using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -21,11 +23,20 @@ namespace DeepSeek_v4_for_VisualStudio.View
         /// </summary>
         private ChatSession CreateNewSessionInternal()
         {
+            // ── 初始化新树 ──
+            _tree = new ConversationTree();
+            Logger.Info("[Tree] 新会话 → ConversationTree 已初始化");
+
+            // ── 重置 AI 标题生成状态 ──
+            _pendingAiTitle = false;
+            _firstUserMessageForTitle = null;
+
             return new ChatSession
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Title = "新对话",
                 Messages = new List<ChatMessage>(),
+                DataVersion = 2,
                 CreatedAt = DateTime.Now,
                 LastActiveAt = DateTime.Now,
             };
@@ -33,12 +44,43 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         /// <summary>
         /// 保存当前活跃会话到容器并持久化。
+        /// 树状结构（DataVersion >= 2）时：
+        /// - TreeDataJson 为唯一权威数据源（含所有 user/assistant 消息）
+        /// - Messages 不再单独保存（避免与树数据重复，减少文件体积）
+        /// - ApiHistory 保留（含 tool/system 消息，树结构不包含这些角色）
         /// </summary>
         private void SaveCurrentSession()
         {
             if (_activeSession == null || _sessionsContainer == null) return;
 
-            _activeSession.Messages = _messages.ToList();
+            // ── 树状结构序列化 ──
+            if (_tree != null)
+            {
+                try
+                {
+                    var treeData = _tree.Serialize();
+                    string treeJson = System.Text.Json.JsonSerializer.Serialize(treeData,
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+                    _activeSession.TreeDataJson = treeJson;
+                    _activeSession.DataVersion = 2;
+
+                    // 树结构已包含所有 user/assistant 消息，清除 Messages 避免冗余存储
+                    _activeSession.Messages = new List<ChatMessage>();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"[Tree] 序列化失败: {ex.Message}", ex);
+                    // 序列化失败时回退到旧格式
+                    _activeSession.Messages = _messages.ToList();
+                }
+            }
+            else
+            {
+                // 无树结构时使用旧格式
+                _activeSession.Messages = _messages.ToList();
+            }
+
+            // ── ApiHistory 始终保存（含 tool/system 消息，树结构不包含）──
             _activeSession.ApiHistory = _contextManager.GetFullContext();
             _activeSession.LastActiveAt = DateTime.Now;
             _sessionsContainer.ActiveSessionId = _activeSession.Id;
@@ -46,8 +88,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 根据第一条用户消息自动设置会话标题。
-        /// 截取前30个字符，去掉换行。
+        /// 根据第一条用户消息，标记等待 AI 生成会话标题。
+        /// 首轮对话完成后，由流式响应结束逻辑调用 GenerateAiTitleAsync 实际生成标题。
         /// </summary>
         private void AutoTitleSession()
         {
@@ -58,8 +100,85 @@ namespace DeepSeek_v4_for_VisualStudio.View
             if (firstUserMsg == null || string.IsNullOrWhiteSpace(firstUserMsg.Content))
                 return;
 
-            string title = firstUserMsg.Content.Trim();
-            // 取第一行或前30个字符
+            // 标记等待 AI 生成标题，存储第一条用户消息供后续摘要使用
+            _pendingAiTitle = true;
+            _firstUserMessageForTitle = firstUserMsg.Content.Trim();
+            Logger.Info($"[AI标题] 已标记等待生成，首条用户消息长度: {_firstUserMessageForTitle.Length}");
+        }
+
+        /// <summary>
+        /// 使用 AI 根据首轮对话内容生成会话标题。
+        /// 在首轮助手回复完成后由流式响应结束逻辑调用。
+        /// </summary>
+        /// <param name="firstUserMessage">第一条用户消息内容</param>
+        /// <param name="firstAssistantReply">第一条助手回复内容</param>
+        private async Task GenerateAiTitleAsync(string firstUserMessage, string firstAssistantReply)
+        {
+            try
+            {
+                if (_apiService == null) return;
+                if (_activeSession == null) return;
+                if (_activeSession.Title != "新对话") return;
+
+                // 截断过长的内容以控制 token 消耗
+                string userSnippet = firstUserMessage.Length > 500
+                    ? firstUserMessage.Substring(0, 500) + "…"
+                    : firstUserMessage;
+                string assistantSnippet = firstAssistantReply.Length > 500
+                    ? firstAssistantReply.Substring(0, 500) + "…"
+                    : firstAssistantReply;
+
+                var prompt = $"请根据以下对话内容，生成一个简洁的会话标题（不超过20个字，不要引号，不要省略号）：\n\n用户：{userSnippet}\n\n助手：{assistantSnippet}\n\n标题：";
+
+                var messages = new List<ChatApiMessage>
+                {
+                    new ChatApiMessage { Role = "user", Content = prompt }
+                };
+
+                Logger.Info("[AI标题] 正在调用 API 生成标题…");
+                string title = await _apiService.CompleteAsync(messages);
+
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    // 清理标题：去除引号、换行、首尾空白
+                    title = title.Trim().Trim('"', '\'', '「', '」', '《', '》', '"', '"');
+                    // 截断到 30 个字符
+                    if (title.Length > 30)
+                        title = title.Substring(0, 30);
+
+                    if (!string.IsNullOrWhiteSpace(title) && _activeSession.Title == "新对话")
+                    {
+                        _activeSession.Title = title;
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        PopulateSessionComboBox();
+                        SaveCurrentSession();
+                        Logger.Info($"[AI标题] 会话标题已更新为: {title}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[AI标题] 生成失败，回退到截取模式: {ex.Message}");
+                // 回退：使用原始截取逻辑
+                FallbackAutoTitle(firstUserMessage);
+            }
+            finally
+            {
+                _pendingAiTitle = false;
+                _firstUserMessageForTitle = null;
+            }
+        }
+
+        /// <summary>
+        /// 回退标题生成：截取第一条用户消息的前30个字符作为标题。
+        /// 当 AI 标题生成失败时使用。
+        /// </summary>
+        private void FallbackAutoTitle(string firstUserMessage)
+        {
+            if (_activeSession == null) return;
+            if (_activeSession.Title != "新对话") return;
+
+            string title = firstUserMessage.Trim();
             int newlineIdx = title.IndexOf('\n');
             if (newlineIdx > 0)
                 title = title.Substring(0, newlineIdx).Trim();
@@ -69,7 +188,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _activeSession.Title = title;
             PopulateSessionComboBox();
             SaveCurrentSession();
-            Logger.Info($"会话标题自动更新为: {title}");
+            Logger.Info($"[AI标题] 回退标题: {title}");
         }
 
         /// <summary>
@@ -102,6 +221,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     _activeSession = session;
                     _activeSession.LastActiveAt = DateTime.Now;
 
+                    // ── 重置 AI 标题生成状态（切换到的会话可能已有标题） ──
+                    _pendingAiTitle = false;
+                    _firstUserMessageForTitle = null;
+
                     // 清空并加载消息
                     _messages.Clear();
                     _contextManager.Clear();
@@ -109,44 +232,76 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     _lastRenderedMessagesLength = 0;
                 }
 
-                // ── 优先使用 ApiHistory 恢复完整上下文（含 tool 消息） ──
-                if (_activeSession.ApiHistory.Count > 0)
+                // ── 优先从 TreeData 恢复树状结构 ──
+                bool treeLoaded = false;
+                if (_activeSession.DataVersion >= 2 && !string.IsNullOrWhiteSpace(_activeSession.TreeDataJson))
                 {
-                    _contextManager.RestoreFullContext(_activeSession.ApiHistory);
-                }
-                else
-                {
-                    // 回退：从 UI 消息列表重建（旧版会话兼容）
-                    foreach (var msg in _activeSession.Messages)
+                    try
                     {
-                        msg.IsStreaming = false;
-                        if (msg.Role is "user" or "assistant")
+                        var treeData = System.Text.Json.JsonSerializer.Deserialize<TreePersistenceData>(
+                            _activeSession.TreeDataJson,
+                            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+                        if (treeData != null)
                         {
-                            string apiContent = msg.Content ?? string.Empty;
-                            if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
-                            {
-                                string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
-                                if (!string.IsNullOrEmpty(fileContext))
-                                    apiContent = fileContext + "\n" + apiContent;
-                            }
-                            lock (_lock)
-                            {
-                                if (msg.Role == "user")
-                                    _contextManager.AddUserMessage(apiContent);
-                                else
-                                    _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
-                            }
+                            _tree = ConversationTree.Deserialize(treeData);
+                            SyncMessagesFromTree();
+                            RebuildContextFromTree();
+                            treeLoaded = true;
+                            Logger.Info($"[Tree] 从 TreeData 恢复 (节点数: {treeData.Nodes.Count})");
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"[Tree] TreeData 反序列化失败，回退到旧格式: {ex.Message}");
                     }
                 }
 
-                foreach (var msg in _activeSession.Messages)
+                if (!treeLoaded)
                 {
-                    msg.IsStreaming = false;
-                    lock (_lock)
+                    _tree = null; // 重置树
+
+                    // ── 优先使用 ApiHistory 恢复完整上下文（含 tool 消息） ──
+                    if (_activeSession.ApiHistory.Count > 0)
                     {
-                        _messages.Add(msg);
+                        _contextManager.RestoreFullContext(_activeSession.ApiHistory);
                     }
+                    else
+                    {
+                        // 回退：从 UI 消息列表重建（旧版会话兼容）
+                        foreach (var msg in _activeSession.Messages)
+                        {
+                            msg.IsStreaming = false;
+                            if (msg.Role is "user" or "assistant")
+                            {
+                                string apiContent = msg.Content ?? string.Empty;
+                                if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                                {
+                                    string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                                    if (!string.IsNullOrEmpty(fileContext))
+                                        apiContent = fileContext + "\n" + apiContent;
+                                }
+                                lock (_lock)
+                                {
+                                    if (msg.Role == "user")
+                                        _contextManager.AddUserMessage(apiContent);
+                                    else
+                                        _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
+                                }
+                            }
+                        }
+                    }
+
+                    foreach (var msg in _activeSession.Messages)
+                    {
+                        msg.IsStreaming = false;
+                        lock (_lock)
+                        {
+                            _messages.Add(msg);
+                        }
+                    }
+
+                    // ── 旧版会话迁移到树状结构 ──
+                    MigrateToTree();
                 }
 
                 // 更新下拉框选中项
@@ -241,6 +396,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 lock (_lock)
                 {
                     _messages.Add(welcomeMsg);
+                    // 欢迎消息不加入树结构（仅 UI 展示）
                 }
                 _activeSession.Messages.Add(welcomeMsg);
 
@@ -268,6 +424,54 @@ namespace DeepSeek_v4_for_VisualStudio.View
             {
                 Logger.Error($"CreateNewChat 异常: {ex.Message}", ex);
                 StatusLabel.Text = $"创建新会话失败: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// 将旧版线性消息列表迁移到树状结构。
+        /// </summary>
+        private void MigrateToTree()
+        {
+            try
+            {
+                var messages = _messages.ToList();
+                if (messages.Count == 0) return;
+
+                _tree = new ConversationTree();
+                ConvNode? lastNode = null;
+
+                foreach (var msg in messages)
+                {
+                    if (msg.Role == "user" || msg.Role == "assistant")
+                    {
+                        if (_tree.Root.Children.Count == 0 && msg.Role == "assistant")
+                        {
+                            // 跳过会话开头的欢迎消息（不加入树）
+                            continue;
+                        }
+
+                        if (lastNode == null)
+                        {
+                            // 第一个用户/助手消息
+                            _tree.AddChildMessage(msg);
+                            lastNode = _tree.ActiveLeaf;
+                        }
+                        else
+                        {
+                            // 后续消息
+                            _tree.AddChildMessage(msg);
+                            lastNode = _tree.ActiveLeaf;
+                        }
+                    }
+                }
+
+                SyncMessagesFromTree();
+                Logger.Info($"[Tree] 旧版会话已迁移到树状结构 (消息数: {messages.Count}, 树节点数: {_tree.TotalNodeCount})");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Tree] 迁移失败: {ex.Message}", ex);
+                _tree = null;
             }
         }
 
@@ -315,39 +519,66 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
                 if (_activeSession != null)
                 {
-                    // ── 优先使用 ApiHistory 恢复完整上下文 ──
-                    if (_activeSession.ApiHistory.Count > 0)
+                    // ── 优先从 TreeData 恢复树状结构 ──
+                    bool treeLoaded = false;
+                    if (_activeSession.DataVersion >= 2 && !string.IsNullOrWhiteSpace(_activeSession.TreeDataJson))
                     {
-                        _contextManager.RestoreFullContext(_activeSession.ApiHistory);
-                    }
-                    else
-                    {
-                        foreach (var msg in _activeSession.Messages)
+                        try
                         {
-                            msg.IsStreaming = false;
-                            if (msg.Role is "user" or "assistant")
+                            var treeData = System.Text.Json.JsonSerializer.Deserialize<TreePersistenceData>(
+                                _activeSession.TreeDataJson,
+                                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+                            if (treeData != null)
                             {
-                                string apiContent = msg.Content ?? string.Empty;
-                                if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                                _tree = ConversationTree.Deserialize(treeData);
+                                SyncMessagesFromTree();
+                                RebuildContextFromTree();
+                                treeLoaded = true;
+                                Logger.Info($"[Tree] DeleteCurrentSession: 从 TreeData 恢复 (节点数: {treeData.Nodes.Count})");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Warn($"[Tree] DeleteCurrentSession TreeData 反序列化失败: {ex.Message}");
+                        }
+                    }
+
+                    if (!treeLoaded)
+                    {
+                        // ── 优先使用 ApiHistory 恢复完整上下文 ──
+                        if (_activeSession.ApiHistory.Count > 0)
+                        {
+                            _contextManager.RestoreFullContext(_activeSession.ApiHistory);
+                        }
+                        else
+                        {
+                            foreach (var msg in _activeSession.Messages)
+                            {
+                                msg.IsStreaming = false;
+                                if (msg.Role is "user" or "assistant")
                                 {
-                                    string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
-                                    if (!string.IsNullOrEmpty(fileContext))
-                                        apiContent = fileContext + "\n" + apiContent;
-                                }
-                                lock (_lock)
-                                {
-                                    if (msg.Role == "user")
-                                        _contextManager.AddUserMessage(apiContent);
-                                    else
-                                        _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
+                                    string apiContent = msg.Content ?? string.Empty;
+                                    if (msg.Role == "user" && msg.AttachedFiles.Count > 0)
+                                    {
+                                        string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                                        if (!string.IsNullOrEmpty(fileContext))
+                                            apiContent = fileContext + "\n" + apiContent;
+                                    }
+                                    lock (_lock)
+                                    {
+                                        if (msg.Role == "user")
+                                            _contextManager.AddUserMessage(apiContent);
+                                        else
+                                            _contextManager.AddAssistantMessage(apiContent, msg.ReasoningContent);
+                                    }
                                 }
                             }
                         }
-                    }
-                    foreach (var msg in _activeSession.Messages)
-                    {
-                        msg.IsStreaming = false;
-                        lock (_lock) { _messages.Add(msg); }
+                        foreach (var msg in _activeSession.Messages)
+                        {
+                            msg.IsStreaming = false;
+                            lock (_lock) { _messages.Add(msg); }
+                        }
                     }
                 }
 
@@ -376,6 +607,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
         {
             try
             {
+                // ── 重置树 ──
+                _tree = new ConversationTree();
+                Logger.Info("[Tree] 清空会话 → ConversationTree 已重置");
+
                 lock (_lock)
                 {
                     _messages.Clear();
@@ -388,6 +623,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 {
                     _activeSession.Messages.Clear();
                     _activeSession.ApiHistory.Clear();
+                    _activeSession.TreeDataJson = null;
+                    _activeSession.DataVersion = 2;
                     _activeSession.Title = "新对话";
                 }
 

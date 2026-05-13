@@ -13,7 +13,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
     /// 支持增量渲染：初始全页 NavigateToString + 后续 ExecuteScriptAsync 增量追加，
     /// 消除流式输出时的全页刷新闪烁。
     /// </summary>
-    public static class ChatHtmlService
+    public static partial class ChatHtmlService
     {
         #region Constants
 
@@ -25,213 +25,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             .DisableHtml()
             .Build();
 
-        /// <summary>highlight.js CDN - 语法高亮脚本</summary>
-        private const string HighlightJsCdnScript = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js";
-
-        /// <summary>highlight.js CDN - 暗色主题 CSS</summary>
-        private const string HighlightJsCdnStyleDark = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css";
-
-        // ═══ 页面 CSS（暗色主题，与 Turbo 一致的现代风格） ═══
-        private const string PageCss = @"
-*{box-sizing:border-box;margin:0;padding:0}
-body{background-color:#1E1E1E;color:#D4D4D4;font-family:'Segoe UI','Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.6;padding:12px 16px;overflow-wrap:break-word;word-wrap:break-word}
-h1,h2,h3,h4,h5,h6{color:#6CAFD9;margin:12px 0 6px;font-weight:600}
-h1{font-size:1.4em;border-bottom:1px solid #444;padding-bottom:4px}
-h2{font-size:1.25em;border-bottom:1px solid #444;padding-bottom:3px}
-h3{font-size:1.1em}
-p{margin:4px 0}
-a{color:#6CAFD9;text-decoration:none}
-a:hover{text-decoration:underline}
-strong,b{color:#E8E8E8;font-weight:600}
-em,i{font-style:italic;color:#C8C8C8}
-code{background-color:#2D2D2D;color:#CE9178;padding:1px 5px;border-radius:3px;font-family:'Cascadia Code',Consolas,monospace;font-size:0.92em}
-pre{background-color:#252526;border-radius:6px;padding:28px 12px 10px 12px;margin:8px 0;overflow-x:auto;font-size:0.9em;line-height:1.5;position:relative}
-pre code{background:transparent;color:#D4D4D4;padding:0;font-size:inherit;white-space:pre;display:block}
-ul,ol{padding-left:24px;margin:6px 0}
-li{margin:2px 0}
-blockquote{border-left:3px solid #6CAFD9;padding:6px 12px;margin:8px 0;background-color:#252526;color:#A0A0A0}
-table.msg-table{border-collapse:collapse;margin:8px 0}
-th,td{padding:6px 10px;text-align:left;border:none}
-th{background:#2D2D2D;color:#E8E8E8;font-weight:600}
-hr{border:none;border-top:1px solid #444;margin:12px 0}
-img{max-width:100%}
-.code-lang{position:absolute;top:4px;left:12px;color:#888;font-size:10px;font-family:'Segoe UI',sans-serif;text-transform:uppercase;letter-spacing:0.5px}
-.copy-btn{position:absolute;top:4px;right:8px;background:#3C3C3C;color:#CCC;border:1px solid #555;border-radius:3px;padding:2px 8px;font-size:11px;cursor:pointer;font-family:'Segoe UI',sans-serif;z-index:1}
-.copy-btn:hover{background:#4A4A4A;color:#FFF}
-.copy-btn.copied{background:#1A3A1A;color:#4EC9B0}
-.msg-ai{background:#2D2D2D;border-radius:8px;padding:10px 14px;color:#D4D4D4;font-size:13px;line-height:1.5}
-.msg-user{background:#264F78;border-radius:8px;padding:10px 14px;color:#D4D4D4;font-size:13px;line-height:1.5}
-/* ── 联网搜索结果卡片 ── */
-.search-results-card{margin:6px 0 10px 0;border:1px solid #3A5A8A;border-radius:6px;background:#1A2636;overflow:hidden}
-.search-results-card summary{cursor:pointer;padding:6px 12px;color:#7EB8E0;font-size:12px;font-weight:600;background:#253545;user-select:none;list-style:none}
-.search-results-card summary::-webkit-details-marker{display:none}
-.search-results-card summary::before{content:'🌐 ';margin-right:4px}
-.search-results-card summary:hover{color:#A0D0F0}
-.search-results-card .search-result-item{padding:6px 12px;border-bottom:1px solid #2A3A4A}
-.search-results-card .search-result-item:last-child{border-bottom:none}
-.search-results-card .search-result-title{color:#6CAFD9;font-size:12px;font-weight:600;text-decoration:none;display:block;margin-bottom:2px}
-.search-results-card .search-result-title:hover{text-decoration:underline}
-.search-results-card .search-result-url{color:#608B4E;font-size:10px;display:block;margin-bottom:2px;word-break:break-all}
-.search-results-card .search-result-snippet{color:#A0A0A0;font-size:11px;line-height:1.4}
-.search-results-card .search-result-date{color:#707070;font-size:10px;display:block;margin-top:2px}
-.msg-header{font-weight:600;font-size:11px;margin-bottom:4px}
-.msg-header-ai{color:#888}
-.msg-header-user{color:#6CAFD9;text-align:right}
-.msg-body{word-wrap:break-word;overflow-wrap:break-word}
-.avatar{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;font-weight:bold;font-size:14px;flex-shrink:0}
-.avatar-ai{background:#4EC9B0;color:#1E1E1E}
-.avatar-user{background:#569CD6;color:#fff}
-/* ── 思考面板样式 ── */
-.reasoning-panel{margin:6px 0;border:1px solid #3A3A6A;border-radius:6px;background:#1A1A2E;overflow:hidden}
-.reasoning-panel summary{cursor:pointer;padding:6px 12px;color:#8A8AD4;font-size:12px;font-weight:600;background:#252545;user-select:none;list-style:none}
-.reasoning-panel summary::-webkit-details-marker{display:none}
-.reasoning-panel summary::before{content:'🧠 ';margin-right:4px}
-.reasoning-panel summary:hover{color:#A0A0D0}
-.reasoning-panel .reasoning-content{padding:8px 12px;color:#8A8AB4;font-size:12px;font-style:italic;line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto}
-/* ── 流式光标闪烁 ── */
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-.streaming-cursor{display:inline-block;width:8px;height:15px;background:#6CAFD9;margin-left:2px;animation:blink 0.8s infinite;vertical-align:text-bottom}
-::-webkit-scrollbar{width:8px;height:8px}
-::-webkit-scrollbar-track{background:#1E1E1E}
-::-webkit-scrollbar-thumb{background:#444;border-radius:4px}
-::-webkit-scrollbar-thumb:hover{background:#555}
-
-/* ── 操作按钮（重试/编辑） ── */
-.msg-action-btn{display:inline-flex;align-items:center;gap:3px;background:transparent;border:1px solid #444;color:#888;cursor:pointer;font-size:11px;padding:2px 8px;border-radius:3px;margin-top:6px;transition:all .15s;opacity:0}
-.msg-action-btn:hover{background:#3C3C3C;color:#D4D4D4;border-color:#666}
-.msg-user:hover .msg-action-btn,.msg-ai:hover .msg-action-btn{opacity:1}
-.msg-action-btn.retry-btn:hover{color:#6CAFD9;border-color:#6CAFD9}
-.msg-action-btn.edit-btn:hover{color:#CE9178;border-color:#CE9178}
-
-/* ── 版本导航栏 ── */
-.version-nav{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;color:#888;user-select:none}
-.version-nav-btn{background:transparent;border:1px solid #444;color:#888;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:3px;transition:all .15s}
-.version-nav-btn:hover:not(:disabled){background:#3C3C3C;color:#D4D4D4;border-color:#666}
-.version-nav-btn:disabled{opacity:.3;cursor:default}
-.version-nav-label{color:#888;min-width:30px;text-align:center}
-.version-nav .sep{color:#555;margin:0 2px}
-
-/* ── Agent 步骤流程管线样式 ── */
-.agent-plan{border:1px solid #3A5A8A;border-radius:10px;background:linear-gradient(180deg,#1A2436 0%,#1A1E2E 100%);padding:16px;margin:6px 0;position:relative;overflow:hidden}
-.agent-plan::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#3A5A8A,#6CAFD9,#3A5A8A);opacity:.6}
-.agent-plan-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
-.agent-plan-title{color:#7EB8E0;font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px}
-.agent-plan-progress{display:flex;align-items:center;gap:8px;font-size:11px;color:#888}
-.agent-plan-progress-bar{width:120px;height:4px;background:#2D2D2D;border-radius:2px;overflow:hidden}
-.agent-plan-progress-bar-fill{height:100%;border-radius:2px;transition:width .5s ease;background:linear-gradient(90deg,#4EC9B0,#6CAFD9)}
-
-/* ── 步骤管线节点 ── */
-.agent-step-node{position:relative;display:flex;align-items:flex-start;gap:10px;padding:0 0 0 0;min-height:36px}
-.agent-step-node:last-child .agent-step-line{display:none}
-.agent-step-bullet-wrap{display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:28px}
-.agent-step-bullet{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #444;background:#252526;color:#888;transition:all .35s ease;position:relative;z-index:1;flex-shrink:0}
-.agent-step-bullet.pending{background:#252526;border-color:#444;color:#666}
-.agent-step-bullet.in-progress{background:#1A2E3E;border-color:#6CAFD9;color:#6CAFD9;box-shadow:0 0 10px rgba(108,175,217,.35);animation:stepPulse 2s ease-in-out infinite}
-.agent-step-bullet.completed{background:#1A2E1A;border-color:#4EC9B0;color:#4EC9B0;box-shadow:0 0 6px rgba(78,201,176,.25)}
-.agent-step-bullet.failed{background:#2E1A1A;border-color:#E07878;color:#E07878;box-shadow:0 0 6px rgba(224,120,120,.25)}
-.agent-step-bullet.skipped{background:#252526;border-color:#555;color:#666}
-.agent-step-bullet.waiting{background:#2E2A1A;border-color:#C8A84E;color:#C8A84E;box-shadow:0 0 8px rgba(200,168,78,.3);animation:stepPulse 1.5s ease-in-out infinite}
-.agent-step-line{width:2px;flex-grow:1;min-height:12px;background:#333;margin:2px 0;transition:background .5s ease}
-.agent-step-line.active{background:linear-gradient(180deg,#6CAFD9,#333)}
-.agent-step-line.done{background:#3A5A3A}
-
-/* ── 步骤内容 ── */
-.agent-step-content{flex:1;padding:2px 0 6px 0;min-width:0}
-.agent-step-title-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.agent-step-title{font-size:12.5px;font-weight:600;line-height:1.4}
-.agent-step-title.pending{color:#888}
-.agent-step-title.in-progress{color:#D4D4D4}
-.agent-step-title.completed{color:#4EC9B0}
-.agent-step-title.failed{color:#E07878}
-.agent-step-title.skipped{color:#666}
-.agent-step-title.waiting{color:#C8A84E}
-.agent-step-summary{font-size:11px;color:#707070;margin-top:2px;line-height:1.4;word-break:break-word}
-.agent-step-detail{margin-top:6px;padding:8px 10px;background:#121A24;border-radius:4px;border-left:2px solid #444;font-size:11px;color:#8A9AB0;white-space:pre-wrap;max-height:180px;overflow-y:auto;display:none;line-height:1.5;transition:border-color .35s ease}
-.agent-step-detail.show{display:block}
-.agent-step-detail.in-progress{border-left-color:#6CAFD9}
-.agent-step-detail.completed{border-left-color:#4EC9B0}
-.agent-step-detail.failed{border-left-color:#E07878}
-
-/* ── 步骤标签（构建/运行/代码/分析） ── */
-.agent-step-tag{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;flex-shrink:0}
-.agent-step-tag.code{background:#1A2E3E;color:#6CAFD9;border:1px solid #2A4A6A}
-.agent-step-tag.build{background:#2E2A1A;color:#C8A84E;border:1px solid #4A3A1A}
-.agent-step-tag.analyze{background:#1A262E;color:#7EB8E0;border:1px solid #2A4A5A}
-.agent-step-tag.verify{background:#1A2E2A;color:#4EC9B0;border:1px solid #2A4A3A}
-
-/* ── 步骤动画 ── */
-@keyframes stepPulse{
-    0%,100%{box-shadow:0 0 6px rgba(108,175,217,.25)}
-    50%{box-shadow:0 0 16px rgba(108,175,217,.5)}
-}
-@keyframes stepSlideIn{
-    from{opacity:0;transform:translateX(-8px)}
-    to{opacity:1;transform:translateX(0)}
-}
-.agent-step-node{animation:stepSlideIn .3s ease-out}
-
-/* ── Agent 计划底部操作栏 ── */
-.agent-plan-footer{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid #2A2A3A;font-size:11px;color:#666}
-.agent-plan-footer .elapsed{color:#555}
-.agent-plan-footer .step-counter{color:#888}
-
-/* ── 文件删除确认卡片 ── */
-.file-delete-card{margin:8px 0;border:1px solid #D16969;border-radius:8px;background:#2E1A1A;overflow:hidden;animation:fadeIn .3s}
-.file-delete-card-header{padding:8px 12px;background:#3E1A1A;border-bottom:1px solid #5A2A2A;display:flex;align-items:center;gap:8px}
-.file-delete-card-header .icon{font-size:16px}
-.file-delete-card-header .title{color:#E07878;font-size:13px;font-weight:700}
-.file-delete-card-body{padding:10px 12px}
-.file-delete-card-body .warning-text{color:#D4A0A0;font-size:12px;margin-bottom:8px;line-height:1.5}
-.file-delete-card-body .file-list{max-height:200px;overflow-y:auto;margin-bottom:10px}
-.file-delete-card-body .file-item{display:flex;align-items:center;gap:6px;padding:3px 0;color:#D4A0A0;font-size:11px;font-family:'Cascadia Code',Consolas,monospace}
-.file-delete-card-body .file-item .file-icon{color:#E07878;flex-shrink:0}
-.file-delete-card-body .file-item .file-path{word-break:break-all}
-.file-delete-card-footer{display:flex;gap:8px;padding:8px 12px;border-top:1px solid #3A1A1A}
-.file-delete-card-footer button{padding:5px 18px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s;border:none}
-.file-delete-btn-confirm{background:#8B2020;color:#FFC0C0;border:1px solid #C04040 !important}
-.file-delete-btn-confirm:hover{background:#A03030;color:#FFE0E0}
-.file-delete-btn-cancel{background:#3C3C3C;color:#CCC;border:1px solid #555 !important}
-.file-delete-btn-cancel:hover{background:#4A4A4A;color:#FFF}
-
-/* ── Agent 规划过程流式日志面板 ── */
-.agent-log-panel{margin:4px 0 8px 0;border:1px solid #2A3A5A;border-radius:6px;background:#121A24;overflow:hidden;animation:fadeIn .3s}
-.agent-log-panel-header{padding:4px 10px;background:#1A2636;border-bottom:1px solid #2A3A5A;display:flex;align-items:center;gap:6px;cursor:pointer}
-.agent-log-panel-header .log-icon{font-size:13px}
-.agent-log-panel-header .log-title{color:#7EB8E0;font-size:11px;font-weight:600}
-.agent-log-panel-header .log-count{color:#5A7A9A;font-size:10px}
-.agent-log-panel-body{padding:4px 0;max-height:300px;overflow-y:auto;font-size:11px;font-family:'Cascadia Code',Consolas,monospace;line-height:1.5}
-.agent-log-panel-body .log-line{padding:1px 10px;color:#6A8AAA;white-space:pre-wrap;word-break:break-word;animation:logSlideIn .2s ease-out}
-.agent-log-panel-body .log-line.warn{color:#C8A84E}
-.agent-log-panel-body .log-line.error{color:#E07878}
-.agent-log-panel-body .log-line.info{color:#6A8AAA}
-.agent-log-panel-body .log-line.success{color:#4EC9B0}
-@keyframes logSlideIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
-
-/* ── 实时文件变更通知条 ── */
-.agent-file-notify{display:flex;align-items:center;gap:6px;padding:3px 10px;margin:2px 0;border-radius:4px;font-size:11px;font-family:'Cascadia Code',Consolas,monospace;animation:logSlideIn .25s ease-out}
-.agent-file-notify.modify{background:#1A2E1A;color:#4EC9B0;border-left:2px solid #4EC9B0}
-.agent-file-notify.create{background:#1A2E2E;color:#6CAFD9;border-left:2px solid #6CAFD9}
-.agent-file-notify.delete{background:#2E1A1A;color:#E07878;border-left:2px solid #E07878}
-
-/* ── Agent 任务流程底部面板（替代独立计划消息，固定在聊天底部）── */
-.agent-task-panel{margin:8px 0 4px 0;border:1px solid #3A5A8A;border-radius:8px;background:linear-gradient(180deg,#1A2436 0%,#1A1E2E 100%);overflow:hidden;animation:taskSlideUp .35s ease-out}
-.agent-task-panel.collapsed .agent-task-panel-body{display:none}
-.agent-task-panel-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#1A2636;border-bottom:1px solid #2A3A5A;cursor:pointer;user-select:none;flex-wrap:wrap}
-.agent-task-panel-header .task-icon{font-size:14px}
-.agent-task-panel-header .task-title{color:#7EB8E0;font-size:12px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.agent-task-panel-header .task-progress{color:#888;font-size:11px;white-space:nowrap}
-.agent-task-panel-header .task-close{background:transparent;border:1px solid #555;color:#888;cursor:pointer;font-size:14px;width:22px;height:22px;border-radius:3px;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0;line-height:1;flex-shrink:0}
-.agent-task-panel-header .task-close:hover{background:#3C1A1A;color:#E07878;border-color:#6A3A3A}
-.agent-task-panel-body{padding:10px 12px;max-height:320px;overflow-y:auto;font-size:12px;line-height:1.5}
-.agent-task-panel-body .task-empty{color:#666;font-size:11px;font-style:italic;padding:8px 0}
-/* 面板内复用 agent-plan 的步骤样式，但不显示 plan 的 margin/border */
-.agent-task-panel-body .agent-plan{border:none;background:transparent;padding:0;margin:0}
-.agent-task-panel-body .agent-plan::before{display:none}
-@keyframes taskSlideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-";
-
-        private const string AiAvatarHtml = "<span class='avatar avatar-ai'>AI</span>";
-        private const string UserAvatarHtml = "<span class='avatar avatar-user'>U</span>";
 
         #endregion
 
@@ -248,9 +41,16 @@ img{max-width:100%}
             {
                 var msg = messages[i];
                 if (msg.Role == "user")
+                {
                     AppendUserMessageHtml(sb, msg.Content ?? string.Empty, msg.AttachedFiles, i);
+                    // ── 编辑产生的分支导航（在用户气泡下方）──
+                    if (msg.SiblingCount > 1 && msg.ForkReason == "edit")
+                        sb.Append(BuildBranchNavHtml(msg, i));
+                }
                 else if (msg.Role == "assistant")
+                {
                     AppendAssistantMessageHtml(sb, msg, i);
+                }
             }
 
             return WrapFullPage(sb.ToString(), hasStreamingMessage: false);
@@ -404,14 +204,6 @@ img{max-width:100%}
         }
 
         /// <summary>
-        /// 获取用于嵌入初始页面的"装饰代码块"JS 函数定义。
-        /// </summary>
-        public static string GetDecorateCodeBlocksJsFunction()
-        {
-            return BuildCodeLangLabelsJs() + BuildCopyBtnJs();
-        }
-
-        /// <summary>
         /// 构建联网搜索结果的 HTML 卡片（可折叠）。
         /// 用于在 AI 回复之前展示搜索到的网页结果。
         /// </summary>
@@ -470,6 +262,115 @@ img{max-width:100%}
 }})();";
         }
 
+        /// <summary>
+        /// 构建内联编辑区域的 JS 脚本。
+        /// 在用户消息气泡中用 textarea + 保存/取消按钮替换正文区域。
+        /// </summary>
+        public static string BuildInlineEditJs(int messageIndex, string originalContent)
+        {
+            // 对文本进行 HTML 编码后嵌入 JS 字符串（防止 </textarea> 等标签注入）
+            string safeText = System.Net.WebUtility.HtmlEncode(originalContent ?? string.Empty);
+            string escapedText = EscapeJsString(safeText);
+
+            // 编辑按钮的 onclick 中需要 JSON 字符串化新文本
+            string escapedOnclickText = EscapeJsString(originalContent ?? string.Empty);
+
+            return $@"
+(function(){{
+    var msgBody=document.getElementById('msg-body-{messageIndex}');
+    if(!msgBody)return;
+
+    // 隐藏原有的编辑按钮
+    var editBtn=document.getElementById('edit-btn-{messageIndex}');
+    if(editBtn)editBtn.style.display='none';
+
+    // 移除已有的内联编辑区
+    var existing=document.getElementById('inline-edit-{messageIndex}');
+    if(existing)existing.remove();
+
+    // 创建内联编辑区
+    var editArea=document.createElement('div');
+    editArea.id='inline-edit-{messageIndex}';
+    editArea.className='inline-edit-area';
+
+    var ta=document.createElement('textarea');
+    ta.id='inline-textarea-{messageIndex}';
+    ta.textContent={escapedText};
+    editArea.appendChild(ta);
+
+    var actions=document.createElement('div');
+    actions.className='edit-actions';
+
+    var saveBtn=document.createElement('button');
+    saveBtn.className='inline-edit-btn-save';
+    saveBtn.textContent='✅ 确认修改';
+    saveBtn.onclick=function(){{
+        var textEl=document.getElementById('inline-textarea-{messageIndex}');
+        var val=textEl?textEl.value:'';
+        window.__editMessageConfirm({messageIndex},val);
+    }};
+    actions.appendChild(saveBtn);
+
+    var cancelBtn=document.createElement('button');
+    cancelBtn.className='inline-edit-btn-cancel';
+    cancelBtn.textContent='❌ 取消';
+    cancelBtn.onclick=function(){{window.__editMessageCancel({messageIndex});}};
+    actions.appendChild(cancelBtn);
+
+    editArea.appendChild(actions);
+
+    // 用编辑区替换正文内容
+    msgBody.innerHTML='';
+    msgBody.appendChild(editArea);
+
+    // 自动聚焦 textarea 并选中全部文字
+    setTimeout(function(){{
+        var taEl=document.getElementById('inline-textarea-{messageIndex}');
+        if(taEl){{taEl.focus();taEl.select();}}
+    }},50);
+
+    // Esc 键取消编辑
+    document.addEventListener('keydown',function handler(e){{
+        if(e.key==='Escape'){{
+            var taEl=document.getElementById('inline-textarea-{messageIndex}');
+            if(taEl && document.activeElement===taEl){{
+                window.__editMessageCancel({messageIndex});
+                document.removeEventListener('keydown',handler);
+            }}
+        }}
+    }});
+
+    window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}});
+}})();";
+        }
+
+        /// <summary>
+        /// 构建恢复用户消息正文的 JS 脚本（取消内联编辑时使用）。
+        /// </summary>
+        public static string BuildRestoreMessageJs(int messageIndex, string originalContent)
+        {
+            string escapedContent = EscapeJsString(originalContent);
+
+            return $@"
+(function(){{
+    var msgBody=document.getElementById('msg-body-{messageIndex}');
+    if(!msgBody)return;
+
+    // 移除内联编辑区
+    var editArea=document.getElementById('inline-edit-{messageIndex}');
+    if(editArea)editArea.remove();
+
+    // 恢复原始正文
+    var text={escapedContent};
+    var html=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    msgBody.innerHTML=html;
+
+    // 恢复编辑按钮
+    var editBtn=document.getElementById('edit-btn-{messageIndex}');
+    if(editBtn)editBtn.style.display='';
+}})();";
+        }
+
         #endregion
 
         #region Private Methods - Message HTML Builders
@@ -478,7 +379,7 @@ img{max-width:100%}
         {
             // ── 编辑按钮（仅在有索引时渲染） ──
             string editBtnHtml = messageIndex >= 0
-                ? $"<button class='msg-action-btn edit-btn' onclick='window.__editMessage({messageIndex})' title='编辑此消息'>✏️ 编辑</button>"
+                ? $"<button id='edit-btn-{messageIndex}' class='msg-action-btn edit-btn' onclick='window.__editMessage({messageIndex})' title='编辑此消息'>✏️ 编辑</button>"
                 : "";
 
             // ── 文件附件：可折叠的 &lt;details&gt; 块 ──
@@ -563,6 +464,8 @@ img{max-width:100%}
             string escaped = System.Net.WebUtility.HtmlEncode((content ?? string.Empty).Trim());
             string body = escaped.Replace("\n", "<br>");
 
+            // ── 分支导航栏（编辑产生的分叉，在用户气泡下方；通过 BuildInitialPage 中基于 ChatMessage 属性渲染）──
+
             sb.Append(
                 "<div style='display:flex;justify-content:flex-end;margin-bottom:14px'>" +
                 "<div style='max-width:85%;text-align:left'>" +
@@ -574,6 +477,26 @@ img{max-width:100%}
                 "</div>" +
                 "<div style='margin-left:10px'>" + UserAvatarHtml + "</div>" +
                 "</div>");
+        }
+
+        /// <summary>
+        /// 构建分支导航 HTML（根据 ForkReason 决定放在用户/助手气泡下）。
+        /// </summary>
+        private static string BuildBranchNavHtml(ChatMessage msg, int msgIndex)
+        {
+            if (msg == null || msg.SiblingCount <= 1) return "";
+
+            int curIdx = msg.SiblingIndex;
+            bool isFirst = curIdx <= 1;
+            bool isLast = curIdx >= msg.SiblingCount;
+            string nodeId = System.Net.WebUtility.HtmlEncode(msg.NodeId ?? "");
+
+            return
+                $"<div class='branch-nav'>" +
+                $"<button class='branch-nav-btn' onclick='window.__navigateBranch(\"{nodeId}\",-1)' title='上一个分支' {(isFirst ? "disabled" : "")}>◀</button>" +
+                $"<span class='branch-nav-label'>分支 {curIdx}/{msg.SiblingCount}</span>" +
+                $"<button class='branch-nav-btn' onclick='window.__navigateBranch(\"{nodeId}\",1)' title='下一个分支' {(isLast ? "disabled" : "")}>▶</button>" +
+                $"</div>";
         }
 
         private static void AppendAssistantMessageHtml(StringBuilder sb, ChatMessage msg, int idx)
@@ -614,21 +537,11 @@ img{max-width:100%}
 
             // ── 重试按钮（非流式、非预渲染 HTML 消息、非生成中才显示） ──
             string retryBtnHtml = !isStreaming && !msg.IsHtml
-                ? $"<button class='msg-action-btn retry-btn' onclick='window.__retryMessage({idx})' title='重新生成回答'>🔄 重试</button>"
+                ? $"<button id='retry-btn-{idx}' class='msg-action-btn retry-btn' onclick='window.__retryMessage({idx})' title='重新生成回答'>🔄 重试</button>"
                 : "";
 
-            // ── 版本导航栏（多版本时显示） ──
-            string versionNavHtml = "";
-            if (!isStreaming && msg.TotalVersions > 1)
-            {
-                int curVer = msg.VersionIndex;
-                versionNavHtml =
-                    $"<div class='version-nav'>" +
-                    $"<button class='version-nav-btn' onclick='window.__navigateVersion({idx},-1)' title='上一个版本' " + (curVer <= 1 ? "disabled" : "") + ">◀</button>" +
-                    $"<span class='version-nav-label'>{curVer}/{msg.TotalVersions}</span>" +
-                    $"<button class='version-nav-btn' onclick='window.__navigateVersion({idx},1)' title='下一个版本' " + (curVer >= msg.TotalVersions ? "disabled" : "") + ">▶</button>" +
-                    $"</div>";
-            }
+            // ── 分支导航栏（重试产生的分叉，在AI气泡下方）──
+            string branchNavHtml = BuildBranchNavHtml(msg, idx);
 
             sb.Append(
                 "<div id='msg-" + idx + "'>" +
@@ -641,7 +554,7 @@ img{max-width:100%}
                 "<div class='msg-body' id='msg-body-" + idx + "'>" + bodyHtml + "</div>" +
                 streamingCursor +
                 retryBtnHtml +
-                versionNavHtml +
+                branchNavHtml +
                 "</div></td></tr></table>" +
                 "</div>");
         }
@@ -797,8 +710,6 @@ img{max-width:100%}
 
         #endregion
 
-        #region Private Methods - Full Page & JS
-
         private static string WrapFullPage(string messagesHtml, bool hasStreamingMessage)
         {
             string autoScrollJs = hasStreamingMessage ? BuildAutoScrollJs() : "";
@@ -818,243 +729,6 @@ img{max-width:100%}
                    "setTimeout(function(){window.scrollTo(0,document.body.scrollHeight);},50);" +
                    "</script></body></html>";
         }
-
-        /// <summary>
-        /// 声明 decorateCodeBlocks 函数（语言标签 + highlight.js 语法高亮 + 复制/应用按钮）。
-        /// 使用 highlight.js CDN 进行语法高亮
-        /// </summary>
-        private static string BuildDecorateCodeBlocksJsFunction()
-        {
-            return @"
-window.decorateCodeBlocks=function(container){
-    if(!container)return;
-    var pres=container.querySelectorAll('pre:not(.mermaid-block)');
-    pres.forEach(function(pre){
-        if(pre.querySelector('.copy-btn'))return;
-        var code=pre.querySelector('code');
-        if(!code)return;
-        var lang='';
-        if(code.className){
-            var m=code.className.match(/language-(\w+)/);
-            if(m)lang=m[1];
-        }
-        if(lang){
-            var label=document.createElement('span');
-            label.className='code-lang';
-            label.textContent=lang;
-            pre.insertBefore(label,pre.firstChild);
-        }
-        // highlight.js 语法高亮
-        if(window.hljs){
-            try{window.hljs.highlightElement(code);}catch(e){}
-        }
-        // 复制按钮
-        var copyBtn=document.createElement('button');
-        copyBtn.className='copy-btn';
-        copyBtn.textContent='📋 复制';
-        copyBtn.title='复制代码到剪贴板';
-        copyBtn.onclick=function(){
-            var target=pre.querySelector('code')||pre;
-            var text=target.innerText,ok=false;
-            if(navigator.clipboard&&navigator.clipboard.writeText){
-                navigator.clipboard.writeText(text);ok=true;
-            }else{
-                var ta=document.createElement('textarea');
-                ta.value=text;ta.style.cssText='position:fixed;opacity:0';
-                document.body.appendChild(ta);ta.select();
-                try{document.execCommand('copy');ok=true;}catch(e){}
-                document.body.removeChild(ta);
-            }
-            if(ok){copyBtn.textContent='✓ 已复制';copyBtn.classList.add('copied');}
-            setTimeout(function(){copyBtn.textContent='📋 复制';copyBtn.classList.remove('copied');},1500);
-        };
-        pre.appendChild(copyBtn);
-        // 应用按钮 - 直接写入编辑器
-        var applyBtn=document.createElement('button');
-        applyBtn.className='copy-btn';
-        applyBtn.textContent='⚡ 写入';
-        applyBtn.title='将代码写入当前活动文档';
-        applyBtn.style.right='60px';
-        applyBtn.onclick=function(){
-            var target=pre.querySelector('code')||pre;
-            var codeText=target.innerText;
-            try{
-                window.chrome.webview.postMessage(JSON.stringify({type:'applyCode',code:codeText}));
-            }catch(e1){
-                try{
-                    window.external.notify(JSON.stringify({type:'applyCode',code:codeText}));
-                }catch(e2){}
-            }
-            applyBtn.textContent='✓ 已写入';
-            applyBtn.classList.add('copied');
-            setTimeout(function(){applyBtn.textContent='⚡ 写入';applyBtn.classList.remove('copied');},1500);
-        };
-        pre.appendChild(applyBtn);
-    });
-};
-";
-        }
-
-        private static string BuildDecorateAllCodeBlocksInvocation()
-        {
-            return "window.decorateCodeBlocks(document.getElementById('chat-container'));";
-        }
-
-        private static string BuildCodeLangLabelsJs()
-        {
-            return @"
-(function(){'use strict';
-var pres=document.querySelectorAll('pre:not(.mermaid-block)');
-pres.forEach(function(pre){
-    var code=pre.querySelector('code');
-    if(!code)return;
-    var lang='';
-    if(code.className){
-        var m=code.className.match(/language-(\w+)/);
-        if(m)lang=m[1];
-    }
-    if(lang){
-        var label=document.createElement('span');
-        label.className='code-lang';
-        label.textContent=lang;
-        pre.insertBefore(label,pre.firstChild);
-    }
-});
-})();";
-        }
-
-        private static string BuildCopyBtnJs()
-        {
-            return @"
-(function(){
-var pres=document.querySelectorAll('pre:not(.mermaid-block)');
-pres.forEach(function(pre){
-    if(pre.querySelector('.copy-btn'))return;
-    var copyBtn=document.createElement('button');
-    copyBtn.className='copy-btn';
-    copyBtn.textContent='📋 复制';
-    copyBtn.title='复制代码到剪贴板';
-    copyBtn.onclick=function(){
-        var target=pre.querySelector('code')||pre;
-        var text=target.innerText,ok=false;
-        if(navigator.clipboard&&navigator.clipboard.writeText){
-            navigator.clipboard.writeText(text);ok=true;
-        }else{
-            var ta=document.createElement('textarea');
-            ta.value=text;ta.style.cssText='position:fixed;opacity:0';
-            document.body.appendChild(ta);ta.select();
-            try{document.execCommand('copy');ok=true;}catch(e){}
-            document.body.removeChild(ta);
-        }
-        if(ok){copyBtn.textContent='✓ 已复制';copyBtn.classList.add('copied');}
-        setTimeout(function(){copyBtn.textContent='📋 复制';copyBtn.classList.remove('copied');},1500);
-    };
-    pre.appendChild(copyBtn);
-    var applyBtn=document.createElement('button');
-    applyBtn.className='copy-btn';
-    applyBtn.textContent='⚡ 写入';
-    applyBtn.title='将代码写入当前活动文档';
-    applyBtn.style.right='60px';
-    applyBtn.onclick=function(){
-        var target=pre.querySelector('code')||pre;
-        var codeText=target.innerText;
-        try{
-            window.chrome.webview.postMessage(JSON.stringify({type:'applyCode',code:codeText}));
-        }catch(e1){
-            try{
-                window.external.notify(JSON.stringify({type:'applyCode',code:codeText}));
-            }catch(e2){}
-        }
-        applyBtn.textContent='✓ 已写入';
-        applyBtn.classList.add('copied');
-        setTimeout(function(){applyBtn.textContent='⚡ 写入';applyBtn.classList.remove('copied');},1500);
-    };
-    pre.appendChild(applyBtn);
-});
-})();";
-        }
-
-        private static string BuildShiftScrollJs()
-        {
-            return @"
-document.addEventListener('wheel',function(e){
-    if(!e.shiftKey)return;
-    var pre=e.target.closest('pre');
-    if(!pre||pre.scrollWidth<=pre.clientWidth)return;
-    pre.scrollLeft+=e.deltaY>0?80:-80;
-    e.preventDefault();
-},{passive:false});";
-        }
-
-        /// <summary>
-        /// 流式自动滚动 JS（MutationObserver）。
-        /// </summary>
-        private static string BuildAutoScrollJs()
-        {
-            return @"
-(function(){
-var timer=null;
-new MutationObserver(function(){
-    if(timer)clearTimeout(timer);
-    timer=setTimeout(function(){window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});},80);
-}).observe(document.body,{childList:true,subtree:true,characterData:true});
-})();";
-        }
-
-        /// <summary>
-        /// 声明 window.__appendMessageHtml 函数，用于增量追加新消息到页面。
-        /// </summary>
-        private static string BuildAppendMessageJsFunction()
-        {
-            return @"
-window.__appendMessageHtml=function(html){
-    var container=document.getElementById('chat-container');
-    if(!container)return;
-    var temp=document.createElement('div');
-    temp.innerHTML=html;
-    while(temp.firstChild){
-        container.appendChild(temp.firstChild);
-    }
-    window.decorateCodeBlocks(container);
-    window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
-};";
-        }
-
-        /// <summary>
-        /// 声明重试/编辑/版本导航的 JS 函数。
-        /// 通过 window.chrome.webview.postMessage 与 C# 通信。
-        /// </summary>
-        private static string BuildRetryEditJsFunctions()
-        {
-            return @"
-window.__sendToHost=function(msg){
-    try{window.chrome.webview.postMessage(JSON.stringify(msg));}
-    catch(e1){try{window.external.notify(JSON.stringify(msg));}catch(e2){}}
-};
-window.__retryMessage=function(msgIndex){
-    window.__sendToHost({type:'retryMessage',messageIndex:msgIndex});
-};
-window.__editMessage=function(msgIndex){
-    window.__sendToHost({type:'editMessage',messageIndex:msgIndex});
-};
-window.__navigateVersion=function(msgIndex,direction){
-    window.__sendToHost({type:'navigateVersion',messageIndex:msgIndex,direction:direction});
-};
-window.__agentApprove=function(requestId){
-    window.__sendToHost({type:'agentApprove',requestId:requestId,approved:true});
-};
-window.__agentDeny=function(requestId){
-    window.__sendToHost({type:'agentApprove',requestId:requestId,approved:false});
-};
-window.__fileDeleteConfirm=function(requestId){
-    window.__sendToHost({type:'fileDeleteConfirm',requestId:requestId,confirmed:true});
-};
-window.__fileDeleteCancel=function(requestId){
-    window.__sendToHost({type:'fileDeleteConfirm',requestId:requestId,confirmed:false});
-};";
-        }
-
-        #endregion
 
         /// <summary>
         /// 构建 Agent 步骤流程管线 HTML（垂直管线布局）。
@@ -1190,336 +864,6 @@ window.__fileDeleteCancel=function(requestId){
                 || title.Contains("Explore") || title.Contains("Understand") || title.Contains("检查");
         }
 
-        /// <summary>
-        /// 构建 Agent 步骤流程管线进度更新 JS（增量更新 DOM，不重建 HTML）。
-        /// 更新每个步骤节点的圆形编号、标题颜色、连接线、摘要和详情区。
-        /// </summary>
-        public static string BuildAgentProgressUpdateJs(AgentTaskPlan plan)
-        {
-            string pid = plan.PlanId;
-            int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
-            int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
-            int total = plan.Steps.Count;
-            int progressPercent = total > 0 ? (completed + failed) * 100 / total : 0;
-
-            var sb = new StringBuilder();
-            sb.Append("(function(){");
-
-            foreach (var step in plan.Steps)
-            {
-                string statusClass = step.Status switch
-                {
-                    AgentStepStatus.Completed => "completed",
-                    AgentStepStatus.InProgress => "in-progress",
-                    AgentStepStatus.Failed => "failed",
-                    AgentStepStatus.Skipped => "skipped",
-                    AgentStepStatus.WaitingApproval => "waiting",
-                    _ => "pending",
-                };
-
-                string bulletText = step.Status switch
-                {
-                    AgentStepStatus.Completed => "✓",
-                    AgentStepStatus.InProgress => "●",
-                    AgentStepStatus.Failed => "✗",
-                    AgentStepStatus.Skipped => "—",
-                    AgentStepStatus.WaitingApproval => "?",
-                    _ => step.Index.ToString(),
-                };
-
-                sb.Append($"var b=document.getElementById('agent-bullet-{pid}-{step.Index}');");
-                sb.Append($"if(b){{b.className='agent-step-bullet {statusClass}';b.textContent='{bulletText}';}}");
-
-                sb.Append($"var t=document.getElementById('agent-title-{pid}-{step.Index}');");
-                sb.Append($"if(t){{t.className='agent-step-title {statusClass}';}}");
-
-                sb.Append($"var s=document.getElementById('agent-summary-{pid}-{step.Index}');");
-                if (!string.IsNullOrEmpty(step.ResultSummary))
-                {
-                    sb.Append($"if(s){{s.style.display='block';s.textContent={EscapeJsString(step.ResultSummary!)};}}");
-                }
-                else
-                {
-                    sb.Append("if(s){s.style.display='none';}");
-                }
-
-                string lineClass = step.Status == AgentStepStatus.Completed ? "done"
-                    : step.Status == AgentStepStatus.InProgress ? "active"
-                    : "";
-                sb.Append($"var l=document.getElementById('agent-line-{pid}-{step.Index}');");
-                sb.Append($"if(l){{l.className='agent-step-line {lineClass}';}}");
-            }
-
-            sb.Append($"var pf=document.getElementById('agent-progress-fill-{pid}');");
-            sb.Append($"if(pf){{pf.style.width='{progressPercent}%';}}");
-
-            // 更新头部步骤计数器
-            sb.Append($"var hc=document.getElementById('agent-header-counter-{pid}');");
-            string headerCounterText = $"{completed}/{total} 步";
-            sb.Append($"if(hc){{hc.textContent='{EscapeJsString(headerCounterText)}';}}");
-
-            sb.Append($"var pc=document.getElementById('agent-step-counter-{pid}');");
-            string counterText = failed > 0
-                ? $"{completed}/{total} 步完成，{failed} 步失败"
-                : $"{completed}/{total} 步完成";
-            sb.Append($"if(pc){{pc.textContent='{EscapeJsString(counterText)}';}}");
-
-            sb.Append("window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});");
-            sb.Append("})();");
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// 构建 Agent 任务完成后的变更摘要 HTML（与流程管线风格一致）。
-        /// </summary>
-        public static string BuildAgentSummaryHtml(AgentTaskPlan plan)
-        {
-            int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
-            int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
-            int total = plan.Steps.Count;
-
-            var sb = new StringBuilder();
-
-            if (plan.IsCancelled)
-            {
-                sb.Append("<div class='agent-plan' style='border-color:#6A3A3A'>");
-                sb.Append("<div class='agent-plan-header'>");
-                sb.Append("<div class='agent-plan-title' style='color:#E07878'>⚠️ 任务已取消</div>");
-                sb.Append($"<div class='agent-plan-progress'><span class='step-counter'>{completed}/{total} 步</span></div>");
-                sb.Append("</div>");
-            }
-            else
-            {
-                string statusColor = failed > 0 ? "#E07878" : "#4EC9B0";
-                string statusIcon = failed > 0 ? "⚠️" : "✅";
-                string borderColor = failed > 0 ? "#6A3A3A" : "#3A5A3A";
-
-                sb.Append($"<div class='agent-plan' style='border-color:{borderColor}'>");
-                sb.Append("<div class='agent-plan-header'>");
-                sb.Append($"<div class='agent-plan-title' style='color:{statusColor}'>{statusIcon} 任务完成 — {completed}/{total} 步成功" +
-                    (failed > 0 ? $"，{failed} 步失败" : "") + "</div>");
-                sb.Append("</div>");
-
-                // ── 逐步骤结果（管线节点紧凑版） ──
-                for (int i = 0; i < plan.Steps.Count; i++)
-                {
-                    var step = plan.Steps[i];
-                    bool isLast = i == plan.Steps.Count - 1;
-
-                    string statusClass = step.Status switch
-                    {
-                        AgentStepStatus.Completed => "completed",
-                        AgentStepStatus.Failed => "failed",
-                        AgentStepStatus.Skipped => "skipped",
-                        _ => "pending",
-                    };
-
-                    string bulletText = step.Status switch
-                    {
-                        AgentStepStatus.Completed => "✓",
-                        AgentStepStatus.Failed => "✗",
-                        AgentStepStatus.Skipped => "—",
-                        _ => "○",
-                    };
-
-                    string lineClass = step.Status == AgentStepStatus.Completed ? "done" : "";
-
-                    sb.Append("<div class='agent-step-node'>");
-                    sb.Append("<div class='agent-step-bullet-wrap'>");
-                    sb.Append($"<div class='agent-step-bullet {statusClass}'>{bulletText}</div>");
-                    if (!isLast)
-                        sb.Append($"<div class='agent-step-line {lineClass}'></div>");
-                    sb.Append("</div>");
-                    sb.Append("<div class='agent-step-content'>");
-                    sb.Append("<div class='agent-step-title-row'>");
-                    sb.Append($"<span class='agent-step-title {statusClass}'>{EscapeHtml(step.Title)}</span>");
-                    sb.Append("</div>");
-                    if (!string.IsNullOrEmpty(step.ResultSummary))
-                        sb.Append($"<div class='agent-step-summary'>{EscapeHtml(step.ResultSummary!)}</div>");
-                    sb.Append("</div></div>");
-                }
-
-                // ── 文件变更表（合并相同文件的多条记录） ──
-                if (plan.ChangedFiles.Count > 0)
-                {
-                    // ── 按文件路径合并：相同文件合并行数，拼接描述 ──
-                    var mergedFiles = plan.ChangedFiles
-                        .GroupBy(c => c.FilePath, StringComparer.OrdinalIgnoreCase)
-                        .Select(g => new FileChangeSummary
-                        {
-                            FilePath = g.Key,
-                            LinesAdded = g.Sum(c => c.LinesAdded),
-                            LinesRemoved = g.Sum(c => c.LinesRemoved),
-                            BriefDescription = string.Join("; ", g.Select(c => c.BriefDescription).Where(d => !string.IsNullOrWhiteSpace(d)).Distinct()),
-                        })
-                        .ToList();
-
-                    sb.Append("<div style='margin-top:10px;padding-top:8px;border-top:1px solid #2A3A2A'>");
-                    sb.Append($"<div style='color:#4EC9B0;font-size:12px;font-weight:600;margin-bottom:6px'>📁 文件变更 ({mergedFiles.Count} 个文件)</div>");
-                    sb.Append("<table style='width:100%;border-collapse:collapse;font-size:11px'>");
-                    sb.Append("<tr style='color:#888'><th style='text-align:left;padding:2px 8px'>文件</th><th style='text-align:right;padding:2px 8px'>+</th><th style='text-align:right;padding:2px 8px'>-</th><th style='text-align:left;padding:2px 8px'>描述</th></tr>");
-
-                    foreach (var change in mergedFiles)
-                    {
-                        string fileName = System.IO.Path.GetFileName(change.FilePath);
-                        sb.Append("<tr>");
-                        sb.Append($"<td style='padding:2px 8px;color:#D4D4D4'>{EscapeHtml(fileName)}</td>");
-                        sb.Append($"<td style='padding:2px 8px;text-align:right;color:#4EC9B0'>+{change.LinesAdded}</td>");
-                        sb.Append($"<td style='padding:2px 8px;text-align:right;color:#E07878'>-{change.LinesRemoved}</td>");
-                        sb.Append($"<td style='padding:2px 8px;color:#888;font-size:10px'>{EscapeHtml(change.BriefDescription ?? "")}</td>");
-                        sb.Append("</tr>");
-                    }
-
-                    sb.Append("</table></div>");
-                }
-                else if (completed == total)
-                {
-                    sb.Append("<div style='color:#888;font-size:11px;margin-top:8px;padding-top:8px;border-top:1px solid #2A2A3A'>ℹ️ 所有步骤已完成，未产生文件变更（分析类任务无需修改文件）</div>");
-                }
-            }
-
-            sb.Append("</div>");
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// 去除 AI 响应中的代码围栏块（```...```），仅保留自然语言描述部分。
-        /// 用于步骤详情区展示，避免渲染大段代码。
-        /// </summary>
-        private static string StripCodeFences(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return text;
-            // 移除 ```...``` 代码块（含语言标注行如 ```file:... 和 ```cpp）
-            var result = System.Text.RegularExpressions.Regex.Replace(
-                text,
-                @"```[\s\S]*?```",
-                " [代码块已省略] ",
-                System.Text.RegularExpressions.RegexOptions.Multiline);
-            // 清理多余空行
-            result = System.Text.RegularExpressions.Regex.Replace(
-                result, @"\n{3,}", "\n\n");
-            return result.Trim();
-        }
-
-        /// <summary>
-        /// 构建 Agent 流式日志面板的初始化 JS。
-        /// 在聊天底部创建一个可折叠的日志面板，用于逐行展示规划/执行过程。
-        /// </summary>
-        /// <param name="planId">关联的计划 ID，用于唯一标识面板</param>
-        /// <param name="title">面板标题（如 "🧠 规划思考过程"）</param>
-        public static string BuildAgentLogStreamPanelJs(string planId, string title)
-        {
-            string escapedTitle = EscapeJsString(title);
-            string escapedPid = EscapeJsString(planId);
-
-            // 在 C# 侧构建完整 HTML，避免 JS 字符串嵌套转义
-            string headerHtml =
-                "<div class=\"agent-log-panel-header\" onclick=\"var b=document.getElementById('agent-log-body-"
-                + planId + "');if(b)b.style.display=b.style.display==='none'?'':'none'\">"
-                + "<span class=\"log-icon\">📋</span>"
-                + "<span class=\"log-title\">" + EscapeHtml(title) + "</span>"
-                + "<span class=\"log-count\" id=\"agent-log-count-" + planId + "\">0 条</span>"
-                + "</div>"
-                + "<div class=\"agent-log-panel-body\" id=\"agent-log-body-" + planId + "\"></div>";
-
-            string escapedInnerHtml = EscapeJsString(headerHtml);
-
-            return $@"
-(function(){{
-    var existing=document.getElementById('agent-log-panel-{escapedPid}');
-    if(existing)return;
-
-    var panel=document.createElement('div');
-    panel.id='agent-log-panel-{escapedPid}';
-    panel.className='agent-log-panel';
-    panel.innerHTML={escapedInnerHtml};
-
-    var container=document.getElementById('chat-container');
-    if(container)container.appendChild(panel);
-    window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}});
-}})();";
-        }
-
-        /// <summary>
-        /// 向指定日志面板追加一条日志行的 JS 脚本。
-        /// </summary>
-        /// <param name="planId">关联的计划 ID</param>
-        /// <param name="level">日志级别: INFO, WARN, ERROR, SUCCESS</param>
-        /// <param name="message">日志内容</param>
-        public static string BuildAgentLogAppendJs(string planId, string level, string message)
-        {
-            string escapedPid = EscapeJsString(planId);
-            string escapedMsg = EscapeJsString(message);
-            string cssClass = level.ToLowerInvariant() switch
-            {
-                "warn" => "warn",
-                "error" => "error",
-                "success" => "success",
-                _ => "info",
-            };
-
-            return $@"
-(function(){{
-    var body=document.getElementById('agent-log-body-{escapedPid}');
-    if(!body)return;
-
-    var line=document.createElement('div');
-    line.className='log-line {cssClass}';
-    line.textContent={escapedMsg};
-    body.appendChild(line);
-
-    var count=document.getElementById('agent-log-count-{escapedPid}');
-    if(count){{var n=body.children.length;count.textContent=n+' 条';}}
-
-    body.scrollTop=body.scrollHeight;
-    window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}});
-}})();";
-        }
-
-        /// <summary>
-        /// 构建实时文件变更通知条的 JS 脚本。
-        /// 在日志面板中追加一条带颜色标记的文件操作通知。
-        /// </summary>
-        /// <param name="planId">关联的计划 ID</param>
-        /// <param name="changeType">变更类型: modify, create, delete</param>
-        /// <param name="filePath">文件路径（仅显示文件名）</param>
-        /// <param name="detail">额外详情（如 +5 -3）</param>
-        public static string BuildAgentFileChangeNotifyJs(string planId, string changeType, string filePath, string detail)
-        {
-            string escapedPid = EscapeJsString(planId);
-            string fileName = System.IO.Path.GetFileName(filePath);
-            string escapedName = EscapeJsString(fileName);
-            string escapedDetail = EscapeJsString(detail);
-            string cssClass = changeType.ToLowerInvariant() switch
-            {
-                "create" => "create",
-                "delete" => "delete",
-                _ => "modify",
-            };
-            string icon = changeType.ToLowerInvariant() switch
-            {
-                "create" => "📄",
-                "delete" => "🗑️",
-                _ => "✏️",
-            };
-
-            return $@"
-(function(){{
-    var body=document.getElementById('agent-log-body-{escapedPid}');
-    if(!body)return;
-
-    var notify=document.createElement('div');
-    notify.className='agent-file-notify {cssClass}';
-    notify.textContent='{icon} '+{escapedName}+({escapedDetail});
-    body.appendChild(notify);
-
-    var count=document.getElementById('agent-log-count-{escapedPid}');
-    if(count){{var n=body.children.length;count.textContent=n+' 条';}}
-
-    body.scrollTop=body.scrollHeight;
-    window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}});
-}})();";
-        }
 
         /// <summary>
         /// 构建权限请求 UI 的 JS 脚本（在聊天底部注入确认/拒绝按钮）。
@@ -1642,7 +986,7 @@ window.__fileDeleteCancel=function(requestId){
         /// </summary>
         public static string BuildAgentTaskPanelCreateJs(AgentTaskPlan plan)
         {
-            string pid = EscapeJsString(plan.PlanId);
+            string pid = plan.PlanId;
             string escapedTitle = EscapeJsString(plan.Title);
             string planHtml = BuildAgentPlanHtml(plan);
             // 移除 agent-plan 自带的外层 div 包装，只保留内部内容（因为面板有自己的 wrapper）
@@ -1653,6 +997,7 @@ window.__fileDeleteCancel=function(requestId){
 
             return $@"
 (function(){{
+    // ── 清除同一 PlanId 的旧面板（若存在则更新），同时移除其他旧任务面板避免堆积 ──
     var existing=document.getElementById('agent-task-panel-{pid}');
     if(existing){{
         // 更新面板内容
@@ -1662,6 +1007,10 @@ window.__fileDeleteCancel=function(requestId){
         if(prog)prog.textContent='{completed}/{total} 步';
         return;
     }}
+
+    // 移除所有旧的 agent-task-panel（不同 PlanId 的残留面板）
+    var oldPanels=document.querySelectorAll('[id^=""agent-task-panel-""]');
+    for(var i=0;i<oldPanels.length;i++){{var op=oldPanels[i];if(op&&op.parentNode)op.parentNode.removeChild(op);}}
 
     // 创建新面板
     var panel=document.createElement('div');
@@ -1687,7 +1036,7 @@ window.__fileDeleteCancel=function(requestId){
         /// </summary>
         public static string BuildAgentTaskPanelUpdateJs(AgentTaskPlan plan)
         {
-            string pid = EscapeJsString(plan.PlanId);
+            string pid = plan.PlanId;
             int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
             int total = plan.Steps.Count;
 
@@ -1770,7 +1119,7 @@ window.__fileDeleteCancel=function(requestId){
         /// </summary>
         public static string BuildAgentTaskPanelCompleteJs(AgentTaskPlan plan)
         {
-            string pid = EscapeJsString(plan.PlanId);
+            string pid = plan.PlanId;
             int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
             int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
             int total = plan.Steps.Count;
@@ -1779,11 +1128,10 @@ window.__fileDeleteCancel=function(requestId){
             string statusText = plan.IsCancelled ? "已取消" : (failed > 0 ? $"{completed}/{total} 步成功，{failed} 步失败" : $"{completed}/{total} 步全部成功");
             string escapedStatusIcon = EscapeJsString(statusIcon);
             string escapedStatusText = EscapeJsString(statusText);
-            string escapedPid = EscapeJsString(pid);
 
             return $@"
 (function(){{
-    var panel=document.getElementById('agent-task-panel-{escapedPid}');
+    var panel=document.getElementById('agent-task-panel-{pid}');
     if(!panel)return;
 
     // 更新标题为完成状态
@@ -1791,29 +1139,20 @@ window.__fileDeleteCancel=function(requestId){
     if(title){{title.textContent={escapedStatusIcon}+' '+{escapedStatusText};title.style.color='{statusColor}';}}
 
     // 更新进度
-    var prog=document.getElementById('agent-task-progress-{escapedPid}');
+    var prog=document.getElementById('agent-task-progress-{pid}');
     if(prog)prog.textContent='{completed}/{total} 步';
 
     // 高亮关闭按钮
-    var closeBtn=document.getElementById('agent-task-close-{escapedPid}');
+    var closeBtn=document.getElementById('agent-task-close-{pid}');
     if(closeBtn){{closeBtn.style.background='#3C1A1A';closeBtn.style.color='#E07878';closeBtn.style.borderColor='#6A3A3A';closeBtn.title='关闭任务面板';}}
 
     // 更新进度条
-    var pf=document.getElementById('agent-progress-fill-{escapedPid}');
+    var pf=document.getElementById('agent-progress-fill-{pid}');
     if(pf)pf.style.width='100%';
 
     // 滚动到底部
     window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}});
 }})();";
-        }
-        /// <summary>
-        /// 转义字符串用于嵌入 JS 字符串字面量。
-        /// </summary>
-        private static string EscapeJsString(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return "\"\"";
-            // 使用 JSON 序列化来安全转义
-            return System.Text.Json.JsonSerializer.Serialize(s);
         }
     }
 }

@@ -1,4 +1,4 @@
-using DeepSeek_v4_for_VisualStudio.Models;
+﻿using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Services;
 using DeepSeek_v4_for_VisualStudio.Services.Agents;
 using DeepSeek_v4_for_VisualStudio.Utils;
@@ -271,7 +271,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         }
                     }
 
-                    // 追加思考过程到摘要后面（折叠显示）——作为独立 HTML 注入，不经过 Markdown 渲染
+                    // 追加思考过程到摘要后面 —— 作为独立 HTML 注入，默认展开显示
                     string thinkingText;
                     lock (_lock) { thinkingText = _agentThinkingContent.ToString(); }
                     string thinkingDetailsHtml = string.Empty;
@@ -281,7 +281,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         string escapedThinking = System.Net.WebUtility.HtmlEncode(thinkingText)
                             .Replace("\n", "<br>");
                         thinkingDetailsHtml =
-                            "<details class='reasoning-panel' style='margin-top:12px'>" +
+                            "<details class='reasoning-panel' style='margin-top:12px' open='true'>" +
                             "<summary>📋 执行过程</summary>" +
                             "<div class='reasoning-content'>" + escapedThinking + "</div>" +
                             "</details>";
@@ -377,6 +377,59 @@ namespace DeepSeek_v4_for_VisualStudio.View
             finally
             {
                 _agentDispatcher.ActivePlan = null;
+            }
+
+            // ── 将 Agent 响应同步到树和上下文管理器（修复上下文丢失问题）──
+            await SyncAgentResponseToTreeAndContextAsync();
+        }
+
+        /// <summary>
+        /// 将 Agent 的最终响应消息同步到对话树和上下文管理器。
+        /// 修复 Agent 执行后上下文丢失的问题：此前 Agent 响应仅写入 _messages 列表，
+        /// 导致树结构缺少该节点、apiHistory 不完整，重新加载会话后上下文断裂。
+        /// </summary>
+        private async Task SyncAgentResponseToTreeAndContextAsync()
+        {
+            try
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                lock (_lock)
+                {
+                    if (_agentStreamingMsgIndex < 0 || _agentStreamingMsgIndex >= _messages.Count)
+                        return;
+
+                    var agentResponseMsg = _messages[_agentStreamingMsgIndex];
+
+                    // 确保消息状态正确
+                    agentResponseMsg.IsStreaming = false;
+                    agentResponseMsg.IsRendered = true;
+
+                    // ── 添加到对话树（如果尚未在树中）──
+                    if (_tree != null && string.IsNullOrEmpty(agentResponseMsg.NodeId))
+                    {
+                        _tree.AddChildMessage(agentResponseMsg);
+                        Logger.Info($"[Agent→Tree] Agent 响应已添加到树 (nodeId={agentResponseMsg.NodeId})");
+                    }
+
+                    // ── 添加到上下文管理器（供后续 API 调用使用）──
+                    string content = agentResponseMsg.Content ?? string.Empty;
+                    string reasoning = agentResponseMsg.ReasoningContent;
+                    if (!string.IsNullOrWhiteSpace(content) || !string.IsNullOrWhiteSpace(reasoning))
+                    {
+                        _contextManager.AddAssistantMessage(
+                            string.IsNullOrWhiteSpace(content) ? null : content,
+                            string.IsNullOrWhiteSpace(reasoning) ? null : reasoning);
+                        Logger.Info($"[Agent→Context] Agent 响应已添加到上下文 (contentLen={content.Length}, reasoningLen={reasoning?.Length ?? 0})");
+                    }
+                }
+
+                // ── 持久化保存 ──
+                SaveCurrentSession();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Agent] 同步响应到树/上下文失败: {ex.Message}", ex);
             }
         }
 
@@ -755,7 +808,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 重试某个助手消息：找到其对应的用户消息，重新发送请求。
+        /// 重试某个助手消息：在助手节点处产生分叉（新 Assistant），切换到新分支后重新生成。
         /// </summary>
         private async Task RetryMessageAsync(int assistantMsgIndex)
         {
@@ -769,8 +822,12 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             try
             {
+                // ── 通过消息索引找到对应的助手 ConvNode ──
+                ConvNode? assistantNode = GetConvNodeByMessageIndex(assistantMsgIndex);
+                if (assistantNode == null || !assistantNode.IsAssistantMessage) return;
+
+                // ── 找到对应的用户消息索引（用于文件回退检查）──
                 int userMsgIndex = -1;
-                ChatMessage? userMsg = null;
                 lock (_lock)
                 {
                     for (int i = assistantMsgIndex - 1; i >= 0; i--)
@@ -778,40 +835,53 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         if (_messages[i].Role == "user")
                         {
                             userMsgIndex = i;
-                            userMsg = _messages[i];
                             break;
                         }
                     }
                 }
 
-                if (userMsg == null) return;
+                if (userMsgIndex < 0) return;
 
                 bool canProceed = await CheckAndRevertFileChangesAsync(userMsgIndex);
                 if (!canProceed) return;
 
-                ChatMessage oldAssistantMsg;
+                // ── 树状分叉：在助手节点处创建新兄弟节点 ──
+                var tree = EnsureTree();
+                var newAssistantMsg = new ChatMessage
+                {
+                    Role = "assistant",
+                    Content = string.Empty,
+                    ReasoningContent = string.Empty,
+                    Timestamp = DateTime.Now,
+                    IsStreaming = true,
+                    IsRendered = false,
+                    ForkReason = "retry",
+                };
+                tree.ForkAt(assistantNode, newAssistantMsg, "retry");
+
+                // ── 同步消息列表并重建上下文 ──
+                RebuildFromTree();
+                RebuildContextFromTree();
+
+                // ── 重新发送用户消息生成新的助手回复 ──
+                ChatMessage? userMsg = null;
+                int newUserMsgIndex = -1;
                 lock (_lock)
                 {
-                    oldAssistantMsg = _messages[assistantMsgIndex];
-
-                    if (!_assistantVersionHistory.ContainsKey(userMsgIndex))
+                    // 找到新分支中 fork 点之前的用户消息
+                    for (int i = _messages.Count - 1; i >= 0; i--)
                     {
-                        _assistantVersionHistory[userMsgIndex] = new List<ChatMessage>();
-                        _activeVersionIndex[userMsgIndex] = 0;
+                        if (_messages[i].Role == "user")
+                        {
+                            userMsg = _messages[i];
+                            newUserMsgIndex = i;
+                            break;
+                        }
                     }
-
-                    var history = _assistantVersionHistory[userMsgIndex];
-                    int activeIdx = _activeVersionIndex.TryGetValue(userMsgIndex, out var idx) ? idx : 0;
-
-                    if (activeIdx < history.Count)
-                        history[activeIdx] = oldAssistantMsg;
-                    else
-                        history.Add(oldAssistantMsg);
-
-                    TrimContextAfterUserMessage(userMsgIndex);
                 }
 
-                await ResendUserMessageAsync(userMsgIndex, userMsg);
+                if (userMsg != null)
+                    await ResendUserMessageAsync(newUserMsgIndex, userMsg);
             }
             catch (Exception ex)
             {
@@ -836,35 +906,26 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
+            // 确保输入框可编辑
+            UpdateButtonsState();
+
             string? originalContent = null;
-            ChatMessage? userMsg = null;
             lock (_lock)
             {
-                userMsg = _messages[userMsgIndex];
-                originalContent = userMsg.OriginalContent ?? userMsg.Content;
+                var uMsg = _messages[userMsgIndex];
+                originalContent = uMsg.OriginalContent ?? uMsg.Content;
             }
 
-            InputTextBox.Text = originalContent ?? string.Empty;
-            InputTextBox.Focus();
-            InputTextBox.SelectAll();
-
-            _attachedFilePaths.Clear();
-            if (userMsg != null && userMsg.AttachedFiles.Count > 0)
+            // ── 在用户气泡处显示内联编辑区 ──
+            string inlineEditJs = ChatHtmlService.BuildInlineEditJs(userMsgIndex, originalContent ?? string.Empty);
+            try
             {
-                foreach (var file in userMsg.AttachedFiles)
-                {
-                    if (!string.IsNullOrEmpty(file.FilePath) && File.Exists(file.FilePath))
-                        _attachedFilePaths.Add(file.FilePath);
-                }
+                await ChatWebView.CoreWebView2.ExecuteScriptAsync(inlineEditJs);
             }
-            if (_attachedFilePaths.Count == 0 && userMsg != null && userMsg.AttachedFileNames.Count > 0)
-            {
-                Logger.Info($"[Edit] AttachedFiles 路径不可用，已恢复 {userMsg.AttachedFileNames.Count} 个文件名到 UI（文件需重新上传)");
-            }
-            RefreshAttachedFilesUI();
+            catch { }
 
             _pendingEditMsgIndex = userMsgIndex;
-            StatusLabel.Text = $"✏️ 编辑消息（按 Enter 发送，Esc 取消）";
+            StatusLabel.Text = $"✏️ 编辑消息（Esc 取消）";
         }
 
         /// <summary>
@@ -873,11 +934,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private int _pendingEditMsgIndex = -1;
 
         /// <summary>
-        /// 处理编辑后重新发送：保存版本历史、回退上下文、重新发送。
+        /// 处理编辑后重新发送：在用户节点处产生分叉（新 User），切换到新分支后重新生成。
         /// </summary>
         private async Task HandleEditResendAsync(int userMsgIndex, string newContent)
         {
-            int editIndex = _pendingEditMsgIndex;
             _pendingEditMsgIndex = -1;
 
             lock (_lock) { _isGenerating = true; }
@@ -896,44 +956,58 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             try
             {
-                ChatMessage? userMsg = null;
-                lock (_lock)
+                // ── 通过消息索引找到对应的用户 ConvNode ──
+                ConvNode? userNode = GetConvNodeByMessageIndex(userMsgIndex);
+                if (userNode == null || !userNode.IsUserMessage)
                 {
-                    if (userMsgIndex < 0 || userMsgIndex >= _messages.Count) return;
-                    userMsg = _messages[userMsgIndex];
-                    if (userMsg.Role != "user") return;
-
-                    int assistantMsgIndex = -1;
-                    if (userMsgIndex + 1 < _messages.Count && _messages[userMsgIndex + 1].Role == "assistant")
-                        assistantMsgIndex = userMsgIndex + 1;
-
-                    if (assistantMsgIndex >= 0)
-                    {
-                        var oldAssistant = _messages[assistantMsgIndex];
-                        if (!_assistantVersionHistory.ContainsKey(userMsgIndex))
-                        {
-                            _assistantVersionHistory[userMsgIndex] = new List<ChatMessage>();
-                            _activeVersionIndex[userMsgIndex] = 0;
-                        }
-                        var history = _assistantVersionHistory[userMsgIndex];
-                        int activeIdx = _activeVersionIndex.TryGetValue(userMsgIndex, out var aidx) ? aidx : 0;
-                        if (activeIdx < history.Count)
-                            history[activeIdx] = oldAssistant;
-                        else
-                            history.Add(oldAssistant);
-                    }
-
-                    if (string.IsNullOrEmpty(userMsg.OriginalContent))
-                        userMsg.OriginalContent = userMsg.Content;
-
-                    userMsg.Content = newContent;
-
-                    TrimContextAfterUserMessage(userMsgIndex);
-                    _contextManager.AddUserMessage(newContent);
+                    lock (_lock) { _isGenerating = false; }
+                    UpdateButtonsState();
+                    StatusLabel.Text = "就绪";
+                    return;
                 }
 
-                if (userMsg != null)
-                    await ResendUserMessageAsync(userMsgIndex, userMsg);
+                ChatMessage? originalUserMsg = null;
+                lock (_lock)
+                {
+                    if (userMsgIndex >= 0 && userMsgIndex < _messages.Count)
+                        originalUserMsg = _messages[userMsgIndex];
+                }
+
+                // ── 树状分叉：在用户节点处创建新兄弟节点（编辑后的用户消息）──
+                var tree = EnsureTree();
+                var editedUserMsg = new ChatMessage
+                {
+                    Role = "user",
+                    Content = newContent,
+                    AttachedFileNames = originalUserMsg?.AttachedFileNames ?? new List<string>(),
+                    AttachedFiles = originalUserMsg?.AttachedFiles ?? new List<FileParseResult>(),
+                    Timestamp = DateTime.Now,
+                    ForkReason = "edit",
+                };
+                tree.ForkAt(userNode, editedUserMsg, "edit");
+
+                // ── 同步消息列表并重建上下文 ──
+                RebuildFromTree();
+                RebuildContextFromTree();
+
+                // ── 重新发送 ──
+                int newUserMsgIndex = -1;
+                ChatMessage? newUserMsg = null;
+                lock (_lock)
+                {
+                    for (int i = _messages.Count - 1; i >= 0; i--)
+                    {
+                        if (_messages[i].Role == "user")
+                        {
+                            newUserMsg = _messages[i];
+                            newUserMsgIndex = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (newUserMsg != null)
+                    await ResendUserMessageAsync(newUserMsgIndex, newUserMsg);
             }
             catch (Exception ex)
             {
@@ -945,84 +1019,88 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 导航到某个助手消息的不同版本。
+        /// 在兄弟分支间导航（树状分叉切换）。
         /// </summary>
-        private async Task NavigateVersionAsync(int assistantMsgIndex, int direction)
+        private async Task NavigateBranchAsync(string nodeId, int direction)
         {
             try
             {
-                int userMsgIndex = -1;
-                lock (_lock)
-                {
-                    if (assistantMsgIndex < 0 || assistantMsgIndex >= _messages.Count) return;
-                    if (_messages[assistantMsgIndex].Role != "assistant") return;
+                var tree = EnsureTree();
+                var node = tree.FindNode(nodeId);
+                if (node == null) return;
 
-                    for (int i = assistantMsgIndex - 1; i >= 0; i--)
-                    {
-                        if (_messages[i].Role == "user")
-                        {
-                            userMsgIndex = i;
-                            break;
-                        }
-                    }
-                }
+                var newLeaf = tree.NavigateSibling(node, direction);
+                if (newLeaf == null) return; // 边界，无法切换
 
-                if (userMsgIndex < 0) return;
+                // ── 同步消息列表并重建上下文 ──
+                RebuildFromTree();
+                RebuildContextFromTree();
 
-                lock (_lock)
-                {
-                    if (!_assistantVersionHistory.TryGetValue(userMsgIndex, out var history) || history.Count == 0)
-                        return;
-
-                    int currentActive = _activeVersionIndex.TryGetValue(userMsgIndex, out var cidx) ? cidx : 0;
-                    int newActive = currentActive + (direction > 0 ? 1 : -1);
-
-                    if (newActive < 0) newActive = history.Count - 1;
-                    if (newActive >= history.Count) newActive = 0;
-
-                    if (newActive == currentActive) return;
-
-                    var currentMsg = _messages[assistantMsgIndex];
-                    if (currentActive < history.Count)
-                        history[currentActive] = currentMsg;
-                    else
-                        history.Add(currentMsg);
-
-                    var targetVersion = history[newActive];
-                    targetVersion.VersionIndex = newActive + 1;
-                    targetVersion.TotalVersions = history.Count;
-                    targetVersion.MessageGroupId = $"ver_{userMsgIndex}";
-
-                    _messages[assistantMsgIndex] = targetVersion;
-                    _activeVersionIndex[userMsgIndex] = newActive;
-                }
-
-                RebuildMessagesHtml();
-                _browserInitialized = false;
+                // ── 更新浏览器 ──
                 UpdateBrowser();
 
                 await Task.CompletedTask;
             }
             catch (Exception ex)
             {
-                Logger.Error($"NavigateVersionAsync 异常: {ex.Message}", ex);
+                Logger.Error($"NavigateBranchAsync 异常: {ex.Message}", ex);
             }
         }
 
         /// <summary>
-        /// 从对话上下文中移除最后一个用户消息及其之后的所有条目。
+        /// 从树活跃路径重建上下文管理器（用于分支切换后同步）。
+        /// 同时从 ApiHistory 恢复 tool/system 消息（树结构不包含这些角色）。
         /// </summary>
-        private void TrimContextAfterUserMessage(int userMsgIndex)
+        private void RebuildContextFromTree()
         {
+            if (_tree == null) return;
+
             lock (_lock)
             {
-                if (userMsgIndex < 0 || userMsgIndex >= _messages.Count) return;
+                _contextManager.Clear();
+                var path = _tree.GetActivePath();
+                foreach (var node in path)
+                {
+                    if (node.Message == null) continue;
+                    var msg = node.Message;
+                    string content = msg.Content ?? string.Empty;
 
-                var userMsg = _messages[userMsgIndex];
-                if (userMsg.Role != "user") return;
+                    if (msg.Role == "user")
+                    {
+                        // 用户消息：附加文件内容（如有）
+                        if (msg.AttachedFiles.Count > 0)
+                        {
+                            string fileContext = FileParserService.FormatParseResultsForContext(msg.AttachedFiles);
+                            if (!string.IsNullOrEmpty(fileContext))
+                                content = fileContext + "\n" + content;
+                        }
+                        _contextManager.AddUserMessage(content);
+                    }
+                    else if (msg.Role == "assistant")
+                    {
+                        _contextManager.AddAssistantMessage(content, msg.ReasoningContent);
+                    }
+                }
 
-                _contextManager.TrimAfterLastUserMessage();
-                Logger.Info($"[Retry/Edit] 已从对话上下文截断（用户消息索引: {userMsgIndex}）");
+                // ── 从 ApiHistory 恢复 tool/system 消息（树结构不包含这些角色）──
+                if (_activeSession?.ApiHistory != null && _activeSession.ApiHistory.Count > 0)
+                {
+                    foreach (var apiMsg in _activeSession.ApiHistory)
+                    {
+                        if (apiMsg.Role == "tool" && !string.IsNullOrEmpty(apiMsg.ToolCallId))
+                        {
+                            _contextManager.AddToolResult(apiMsg.ToolCallId,
+                                apiMsg.Name ?? "unknown", apiMsg.Content ?? string.Empty);
+                        }
+                        else if (apiMsg.Role == "system")
+                        {
+                            _contextManager.AddCustomMessage("system", apiMsg.Content ?? string.Empty);
+                        }
+                    }
+                }
+
+                Logger.Info($"[Tree→Context] 已从 {path.Count} 个节点重建上下文"
+                    + (_activeSession?.ApiHistory?.Count > 0 ? $" (+ {_activeSession.ApiHistory.Count} 条 ApiHistory)" : ""));
             }
         }
 
@@ -1054,16 +1132,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
             var tokenStats = _contextManager.GetStats();
             Logger.Info($"[TokenUsage] 当前对话 Token: {tokenStats.EstimatedTokens:N0}/{tokenStats.TokenBudget:N0} ({tokenStats.UsagePercent:F1}%) | 轮次: {tokenStats.TurnCount} | 消息: {tokenStats.MessageCount}");
 
-            lock (_lock)
-            {
-                int removeFrom = userMsgIndex + 1;
-                if (removeFrom < _messages.Count)
-                {
-                    int removedCount = _messages.Count - removeFrom;
-                    _messages.RemoveRange(removeFrom, removedCount);
-                    Logger.Info($"[Retry/Edit] 已从消息列表移除 {removedCount} 条后续消息 (从索引 {removeFrom})");
-                }
-            }
+            // ── 树状结构：不再需要裁剪 _messages（分支切换时已由 SyncMessagesFromTree 处理）──
+            // ── 树状结构：上下文已由 RebuildContextFromTree 重建，无需手动检查 userExistsInHistory ──
 
             _currentStreamingCts?.Cancel();
             _currentStreamingCts?.Dispose();
@@ -1074,37 +1144,6 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             try
             {
-                lock (_lock)
-                {
-                    bool userExistsInHistory = false;
-                    string searchContent = userMsg.Content ?? string.Empty;
-                    var history = _contextManager.GetConversationHistory();
-                    foreach (var m in history)
-                    {
-                        if (m.Role == "user" &&
-                            ((m.Content?.Contains(searchContent) == true) ||
-                             (searchContent.Contains(m.Content ?? string.Empty)) ||
-                             string.Equals((m.Content ?? string.Empty).Trim(), searchContent.Trim(), StringComparison.Ordinal)))
-                        {
-                            userExistsInHistory = true;
-                            break;
-                        }
-                    }
-
-                    if (!userExistsInHistory)
-                    {
-                        string fullUserContent = searchContent;
-                        if (userMsg.AttachedFiles.Count > 0)
-                        {
-                            string fileContext = FileParserService.FormatParseResultsForContext(userMsg.AttachedFiles);
-                            if (!string.IsNullOrEmpty(fileContext))
-                                fullUserContent = fileContext + "\n" + fullUserContent;
-                        }
-                        _contextManager.AddUserMessage(fullUserContent);
-                        Logger.Info("[Retry] 已将用户消息重新加入对话历史");
-                    }
-                }
-
                 StatusLabel.Text = "DeepSeek 思考中…";
 
                 string userContent = userMsg.Content ?? string.Empty;
@@ -1193,8 +1232,18 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 };
                 lock (_lock)
                 {
-                    _messages.Add(assistantMsg);
-                    newAssistantIdx = _messages.Count - 1;
+                    // ── 树状结构：通过 AddChildMessage 添加到活跃分支 ──
+                    if (_tree != null)
+                    {
+                        _tree.AddChildMessage(assistantMsg);
+                        SyncMessagesFromTree();
+                        newAssistantIdx = _messages.Count - 1;
+                    }
+                    else
+                    {
+                        _messages.Add(assistantMsg);
+                        newAssistantIdx = _messages.Count - 1;
+                    }
                 }
 
                 RebuildMessagesHtml();
@@ -1261,18 +1310,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     contentBuffer.ToString(),
                     reasoningBuffer.Length > 0 ? reasoningBuffer.ToString() : null);
 
-                lock (_lock)
-                {
-                    if (_assistantVersionHistory.TryGetValue(userMsgIndex, out var history))
-                    {
-                        history.Add(assistantMsg);
-                        assistantMsg.VersionIndex = history.Count;
-                        assistantMsg.TotalVersions = history.Count;
-                        assistantMsg.MessageGroupId = $"ver_{userMsgIndex}";
-                        _activeVersionIndex[userMsgIndex] = history.Count - 1;
-                        Logger.Info($"[Retry] 版本历史: 共 {history.Count} 个版本, 当前版本 {assistantMsg.VersionIndex}");
-                    }
-                }
+                // ── 树状结构：不再需要版本历史字典 ──
 
                 RebuildMessagesHtml();
                 _browserInitialized = false;
@@ -1319,6 +1357,66 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 _currentStreamingCts = null;
                 UpdateButtonsState();
             }
+        }
+
+        /// <summary>
+        /// 内联编辑确认：接收用户在气泡中编辑后的新文本，处理重新发送。
+        /// </summary>
+        private async Task HandleEditConfirmAsync(int userMsgIndex, string newContent)
+        {
+            lock (_lock)
+            {
+                if (_isGenerating) return;
+                if (_pendingEditMsgIndex < 0) return;
+            }
+
+            _pendingEditMsgIndex = -1;
+
+            // 移除内联编辑区 UI
+            try
+            {
+                if (ChatWebView.CoreWebView2 != null)
+                {
+                    await ChatWebView.CoreWebView2.ExecuteScriptAsync(
+                        $"var el=document.getElementById('inline-edit-{userMsgIndex}');if(el)el.remove();" +
+                        $"var eb=document.getElementById('edit-btn-{userMsgIndex}');if(eb)eb.style.display='';");
+                }
+            }
+            catch { }
+
+            await HandleEditResendAsync(userMsgIndex, newContent);
+        }
+
+        /// <summary>
+        /// 内联编辑取消：恢复用户消息原样，清除编辑状态。
+        /// </summary>
+        private async Task HandleEditCancelAsync(int userMsgIndex)
+        {
+            _pendingEditMsgIndex = -1;
+
+            // 恢复消息正文为原始内容
+            string? originalText = null;
+            lock (_lock)
+            {
+                if (userMsgIndex >= 0 && userMsgIndex < _messages.Count)
+                {
+                    var msg = _messages[userMsgIndex];
+                    if (msg.Role == "user")
+                        originalText = msg.Content;
+                }
+            }
+
+            try
+            {
+                if (ChatWebView.CoreWebView2 != null)
+                {
+                    string restoreJs = ChatHtmlService.BuildRestoreMessageJs(userMsgIndex, originalText ?? string.Empty);
+                    await ChatWebView.CoreWebView2.ExecuteScriptAsync(restoreJs);
+                }
+            }
+            catch { }
+
+            StatusLabel.Text = "就绪";
         }
 
         #endregion

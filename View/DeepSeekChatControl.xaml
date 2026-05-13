@@ -553,7 +553,7 @@
                                 Style="{StaticResource TransparentButton}"
                                 Margin="0,0,8,0" FontSize="12"
                                 Foreground="#4EC9B0" />
-                        <Button Content="清空" Click="ClearButton_Click"
+                        <Button x:Name="ClearButton" Content="清空" Click="ClearButton_Click"
                                 Style="{StaticResource TransparentButton}"
                                 Margin="0,0,4,0" />
                         <Button x:Name="StopButton" Content="⏹"

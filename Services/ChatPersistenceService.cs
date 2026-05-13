@@ -55,6 +55,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         public static SessionsContainer LoadSessions(string? solutionPath)
         {
             var filePath = GetStoragePath(solutionPath);
+            bool isUnsaved = string.IsNullOrWhiteSpace(solutionPath);
 
             try
             {
@@ -78,6 +79,40 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                             foreach (var msg in session.Messages)
                                 msg.IsStreaming = false;
                         }
+
+                        // ── 清理 _unsaved.json 中从未使用过的冗余空会话 ──
+                        // 判断标准：仅含≤1条欢迎消息、无 ApiHistory、标题为"新对话"
+                        int originalCount = container.Sessions.Count;
+                        if (isUnsaved && originalCount > 1)
+                        {
+                            container.Sessions = container.Sessions
+                                .Where(s => !IsUnusedEmptySession(s))
+                                .ToList();
+
+                            // 确保至少保留一个会话
+                            if (container.Sessions.Count == 0)
+                            {
+                                container.Sessions.Add(new ChatSession
+                                {
+                                    Id = Guid.NewGuid().ToString("N"),
+                                    Title = "新对话",
+                                    Messages = new List<ChatMessage>(),
+                                    CreatedAt = DateTime.Now,
+                                    LastActiveAt = DateTime.Now,
+                                });
+                            }
+
+                            // 修正 ActiveSessionId（如果被清理的会话是活跃会话）
+                            if (container.Sessions.All(s => s.Id != container.ActiveSessionId))
+                            {
+                                container.ActiveSessionId = container.Sessions[0].Id;
+                            }
+
+                            int removed = originalCount - container.Sessions.Count;
+                            if (removed > 0)
+                                Logger.Info($"[清理] 已移除 {removed} 个冗余空会话 ← {Path.GetFileName(filePath)}");
+                        }
+
                         Logger.Info($"已加载 {container.Sessions.Count} 个会话 ← {Path.GetFileName(filePath)}");
                         return container;
                     }
@@ -162,6 +197,39 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             {
                 Logger.Error("删除会话文件失败", ex);
             }
+        }
+
+        /// <summary>
+        /// 判断会话是否为从未使用过的空会话（仅含欢迎消息，无实际对话）。
+        /// 用于 _unsaved.json 冗余清理。
+        /// </summary>
+        private static bool IsUnusedEmptySession(ChatSession session)
+        {
+            if (session == null) return true;
+
+            // 有 API 历史记录 → 使用过
+            if (session.ApiHistory.Count > 0) return false;
+
+            // 标题被修改过 → 使用过
+            if (!string.IsNullOrEmpty(session.Title) && session.Title != "新对话") return false;
+
+            // 超过 1 条消息 → 使用过
+            if (session.Messages.Count > 1) return false;
+
+            // 0 条消息 → 空会话
+            if (session.Messages.Count == 0) return true;
+
+            // 恰好 1 条消息：检查是否仅含欢迎消息
+            var msg = session.Messages[0];
+            if (msg.Role == "assistant" && !string.IsNullOrEmpty(msg.Content))
+            {
+                // 欢迎消息或 API Key 缺失警告 → 未使用
+                if (msg.Content.Contains("我是 DeepSeek Chat") ||
+                    msg.Content.Contains("API"))
+                    return true;
+            }
+
+            return false;
         }
 
         #endregion

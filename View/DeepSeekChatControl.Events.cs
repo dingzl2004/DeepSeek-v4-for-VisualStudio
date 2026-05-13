@@ -1240,14 +1240,45 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         if (msgIndex >= 0)
                             _ = EditMessageAsync(msgIndex);
                     }
-                    else if (type == "navigateVersion")
+                    else if (type == "editMessageConfirm")
                     {
-                        int msgIndex = obj.TryGetProperty("messageIndex", out var navIdxProp)
-                            ? navIdxProp.GetInt32() : -1;
+                        int msgIndex = obj.TryGetProperty("messageIndex", out var editConfirmIdxProp)
+                            ? editConfirmIdxProp.GetInt32() : -1;
+                        string newText = obj.TryGetProperty("text", out var editTextProp)
+                            ? editTextProp.GetString() ?? string.Empty : string.Empty;
+                        if (msgIndex >= 0 && !string.IsNullOrEmpty(newText))
+                            _ = HandleEditConfirmAsync(msgIndex, newText);
+                    }
+                    else if (type == "editMessageCancel")
+                    {
+                        int msgIndex = obj.TryGetProperty("messageIndex", out var editCancelIdxProp)
+                            ? editCancelIdxProp.GetInt32() : -1;
+                        if (msgIndex >= 0)
+                            _ = HandleEditCancelAsync(msgIndex);
+                    }
+                    else if (type == "navigateBranch")
+                    {
+                        string nodeId = obj.TryGetProperty("nodeId", out var nodeIdProp)
+                            ? nodeIdProp.GetString() ?? string.Empty : string.Empty;
                         int direction = obj.TryGetProperty("direction", out var dirProp)
                             ? dirProp.GetInt32() : 0;
+                        if (!string.IsNullOrEmpty(nodeId) && direction != 0)
+                            _ = NavigateBranchAsync(nodeId, direction);
+                    }
+                    else if (type == "navigateVersion")
+                    {
+                        // ── 旧版兼容：转换为 navigateBranch ──
+                        int msgIndex = obj.TryGetProperty("messageIndex", out var navIdxProp)
+                            ? navIdxProp.GetInt32() : -1;
+                        int direction = obj.TryGetProperty("direction", out var dirPropOld)
+                            ? dirPropOld.GetInt32() : 0;
                         if (msgIndex >= 0 && direction != 0)
-                            _ = NavigateVersionAsync(msgIndex, direction);
+                        {
+                            // 旧版按消息索引导航 → 转为按 nodeId 导航
+                            var node = GetConvNodeByMessageIndex(msgIndex);
+                            if (node != null)
+                                _ = NavigateBranchAsync(node.Id, direction);
+                        }
                     }
                     else if (type == "agentApprove")
                     {
