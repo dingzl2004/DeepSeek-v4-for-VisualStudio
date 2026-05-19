@@ -32,7 +32,7 @@
 - **1M Token 上下文** — 承载大型代码库，智能压缩不丢信息
 - **三种编辑方法** — Patch / Insert / Create，四级匹配精准应用
 - **RAG 检索增强** — 可插拔的知识库集成
-- **三大 OCR 引擎** — 读懂你的报错截图
+- **双 OCR 引擎** — 读懂你的报错截图
 
 ---
 
@@ -49,7 +49,7 @@
 | 🔍 **RAG 检索** | 可插拔提供者接口 · 智能缓存 · 自动注入对话上下文 · 🚧 内置向量库开发中 |
 | 🌐 **联网搜索** | 百度千帆 (月1500次免费) + DuckDuckGo 双引擎 · 额度耗尽自动切换 |
 | 📄 **文件解析** | 50+ 格式 · 代码/文档/PDF/Word/Excel 全支持 · 拖拽即解析 |
-| 🖼️ **图像 OCR** | Windows 内置 · PaddleOCR ≥95% · MCP OCR 三引擎 |
+| 🖼️ **图像 OCR** | Windows 内置 · MCP 远程 OCR 双引擎 |
 | 📊 **代码差异预览** | 编辑器内红绿 Diff 标记 · 确认/撤销/一键应用 |
 | 💡 **Ghost Text 补全** | 行内灰色预测 · 上下文感知 · 可配置防抖延迟 |
 | 💬 **聊天窗口** | WebView2 渲染 · Markdown/代码高亮 · 多会话持久化 · 计划实时展示 |
@@ -224,13 +224,12 @@ ragService.IsEnabled = true;
 
 ## 图像 OCR
 
-三种 OCR 引擎满足不同场景：
+两种 OCR 引擎满足不同场景：
 
 | 引擎 | 中文识别率 | 配置难度 | 适用场景 |
 |------|-----------|----------|----------|
 | **Windows 内置** | 一般 | 零配置 | 英文截图、快速查看 |
-| **PaddleOCR-Sharp** | ≥95% | 自动下载模型 | 中文报错截图（推荐） |
-| **MCP OCR** | 取决于服务端 | 需配置服务器 | 有自定义 OCR 服务时 |
+| **MCP OCR** | 取决于服务端 | 需配置服务器 | 中文/高精度 OCR（推荐） |
 
 > 💡 直接 `Ctrl+V` 粘贴报错截图，AI 自动识别文字并分析问题，无需手动输入错误信息。
 
@@ -289,6 +288,51 @@ git clone https://github.com/zmy15/DeepSeek-v4-for-VisualStudio.git
 
 ---
 
+## 🌐 国际化 (i18n) / 多语言支持
+
+DeepSeek v4 for Visual Studio 支持**中文和英文**界面，自动跟随系统语言，也可手动切换。
+
+### 自动语言检测
+
+插件启动时自动检测 Windows 系统 UI 语言：
+- **中文系统** → 显示中文界面和提示词
+- **英文/其他系统** → 显示英文界面和提示词
+
+### 手动切换语言
+
+1. 打开 `工具 → 选项 → DeepSeek Chat`
+2. 找到 **Language / 语言** 分类
+3. 在 **界面语言 / Language** 下拉框中选择：
+   - `auto` — 自动检测系统语言（默认）
+   - `zh-CN` — 强制使用中文
+   - `en` — 强制使用英文
+4. 点击"确定"，界面立即生效
+
+### 自定义翻译
+
+你可以创建自定义翻译文件来覆盖默认翻译：
+
+1. 在扩展安装目录的 `Resources\Locales\` 下创建 `zh-CN.user.json` 或 `en.user.json`
+2. 写入你想要覆盖的键值对，例如：
+
+```json
+{
+  "ui.welcomeMessage": "你好！欢迎使用自定义欢迎语！\n开始提问吧！"
+}
+```
+
+3. 重启 Visual Studio 或切换语言后生效
+
+### 覆盖范围
+
+i18n 覆盖以下内容：
+- **界面文字** — 工具窗口标题、按钮标签、对话框
+- **AI 提示词** — 系统提示词、技能提示词、Agent 路由提示词
+- **输出信息** — 欢迎语、错误提示、API 状态消息
+- **设置页面** — 所有选项的显示名称和描述
+
+---
+
 ## 快速上手
 
 ### ① 获取 API Key
@@ -306,7 +350,7 @@ git clone https://github.com/zmy15/DeepSeek-v4-for-VisualStudio.git
 | Enable Deep Thinking | ✅ 开启 | 让模型展示推理过程 |
 | Reasoning Effort | `high` | 推理深度（high / max） |
 | Search Provider | `百度千帆` | 国内推荐，月1500次免费 |
-| OCR Engine | `PaddleOCR-Sharp` | 中文识别最佳 |
+| OCR Engine | `Windows Built-in` | 零配置即可使用 |
 | Show Diff Markers | ✅ 开启 | 修改前预览差异 |
 | Copilot Enable | ✅ 开启 | 行内代码补全 |
 | Token Budget | `900000` | 1M 上下文上限 |
@@ -494,7 +538,7 @@ DeepSeek_v4_for_VisualStudio.Tests/
 <details>
 <summary><b>Q: OCR 识别中文不准？</b></summary>
 
-将 OCR 引擎切换到 `PaddleOCR-Sharp`（`工具 → 选项 → DeepSeek Chat → OCR Engine`），首次使用会自动下载 ChineseV5 模型。
+配置 MCP OCR 服务器（如 paddleocr-mcp）以获得高精度中文 OCR。`工具 → 选项 → DeepSeek Chat → MCP 配置`。
 </details>
 
 <details>
@@ -566,7 +610,7 @@ DeepSeek_v4_for_VisualStudio.Tests/
 ## 致谢
 
 - [DeepSeek](https://www.deepseek.com/) — 强大的 AI 模型支持
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) — 出色的 OCR 引擎
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) — 出色的 OCR 引擎（可通过 MCP 协议接入）
 - [Markdig](https://github.com/xoofx/markdig) — 快速的 Markdown 解析器
 
 ---
