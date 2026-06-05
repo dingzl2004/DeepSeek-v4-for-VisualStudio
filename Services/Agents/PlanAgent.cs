@@ -128,7 +128,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 // ═══════════════════════════════════════════════════════════
                 if (plan != null && ExploreAgent != null && !string.IsNullOrEmpty(context.SolutionPath))
                 {
-                    var cachedFiles = ExploreAgent.GetCachedDiscoveredFiles(context.SolutionPath);
+                    var cachedFiles = ExploreAgent.GetCachedDiscoveredFiles(context.SolutionPath!);
                     if (cachedFiles != null && cachedFiles.Count > 0)
                     {
                         plan.DiscoveredFiles = cachedFiles;
@@ -164,7 +164,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             if (extractedSteps.Count > 1)
                             {
                                 plan.Steps = extractedSteps;
-                                plan.Title = plan.Title ?? extractedSteps.FirstOrDefault()?.Title ?? plan.Title;
+                                plan.Title = plan.Title ?? extractedSteps.FirstOrDefault()?.Title ?? plan.Title ?? "";
                                 AddLog("INFO", string.Format(L["agent.log.planStepsExtractedFromMd"],
                                     extractedSteps.Count, planFilePath));
                                 // 更新 Handoff prompt 中的步骤数
@@ -250,7 +250,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     if (!string.IsNullOrEmpty(context.SolutionPath)
                         && _exploreAgent != null)
                     {
-                        var cachedFiles = _exploreAgent.GetCachedDiscoveredFiles(context.SolutionPath);
+                        var cachedFiles = _exploreAgent.GetCachedDiscoveredFiles(context.SolutionPath!);
                         if (cachedFiles != null && cachedFiles.Count > 0)
                         {
                             // 从缓存文件列表构建结构上下文（目录树摘要），跳过 Phase 1 API 调用
@@ -274,7 +274,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         var phase1Result = await RunSingleExploreAsync("structure", phase1Prompt, context);
                         if (phase1Result.Success && !string.IsNullOrEmpty(phase1Result.Findings))
                         {
-                            structureContext = phase1Result.Findings;
+                            structureContext = phase1Result.Findings!;
                             sb.AppendLine(string.Format(L["plan.discovery.areaHeader"], L["agent.log.explorePhase1Label"]));
                             sb.AppendLine(structureContext);
                             sb.AppendLine();
@@ -437,7 +437,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 string relative = dir;
                 if (!string.IsNullOrEmpty(commonRoot) && dir.StartsWith(commonRoot, StringComparison.OrdinalIgnoreCase))
                 {
-                    relative = dir.Substring(commonRoot.Length).TrimStart(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                    relative = dir.Substring(commonRoot!.Length).TrimStart(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
                 }
                 if (string.IsNullOrEmpty(relative)) continue;
 

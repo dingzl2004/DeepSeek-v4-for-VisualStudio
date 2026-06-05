@@ -326,14 +326,15 @@ public class PlanAgentTests
     public void LogEntryAdded_FiresWhenExploreAgentLogs()
     {
         var agent = new PlanAgent(_apiService);
-        AgentLogEntry? capturedLog = null;
-        agent.LogEntryAdded += (log) => capturedLog = log;
 
         // Simulate ExploreAgent adding a log through the internal explore agent
         RaiseLogEntryAddedPublic(agent.ExploreAgent!, new AgentLogEntry { Level = "INFO", Message = "探索完成" });
 
-        capturedLog.Should().NotBeNull();
-        capturedLog!.Message.Should().Contain("[Explore]");
+        // OnExploreLog adds to _logs with [Explore] prefix but does NOT fire LogEntryAdded
+        // (by design, to avoid duplicate UI output)
+        var logs = agent.GetLogs();
+        logs.Should().NotBeEmpty();
+        logs.Should().Contain(l => l.Message.Contains("[Explore]") && l.Message.Contains("探索完成"));
     }
 
     #endregion

@@ -682,7 +682,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         }
                         else if (!string.IsNullOrEmpty(r.FinalContent))
                         {
-                            realAdded = CountLines(r.FinalContent);
+                            realAdded = CountLines(r.FinalContent!);
                         }
                         else
                         {
@@ -1847,7 +1847,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             {
                 AddLog("INFO", string.Format(
                     LocalizationService.Instance["agent.log.codeMemoryUpdated"] ?? "代码记忆已更新 ({0} 字符, {1} 个文件)",
-                    context.CodeMemory.Length, candidates.Count(c => context.CodeMemory!.Contains(System.IO.Path.GetFileName(c.Path)))));
+                    context.CodeMemory!.Length, candidates.Count(c => context.CodeMemory!.Contains(System.IO.Path.GetFileName(c.Path)))));
             }
         }
 
@@ -2140,7 +2140,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 // ── 第2层：ExploreAgent 文件列表缓存 ──
                 else if (ExploreAgent != null)
                 {
-                    var cached = ExploreAgent.GetCachedDiscoveredFiles(solutionPath);
+                    var cached = ExploreAgent.GetCachedDiscoveredFiles(solutionPath!);
                     if (cached != null && cached.Count > 0)
                     {
                         relevantFiles = cached;

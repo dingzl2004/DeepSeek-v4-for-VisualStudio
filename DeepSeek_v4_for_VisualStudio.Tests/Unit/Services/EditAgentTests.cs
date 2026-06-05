@@ -262,17 +262,17 @@ public class EditAgentTests
     {
         var agent = new EditAgent(_apiService);
         var exploreAgent = new ExploreAgent(_apiService);
-        AgentLogEntry? capturedLog = null;
-        agent.LogEntryAdded += (log) => capturedLog = log;
 
         agent.ExploreAgent = exploreAgent;
 
         // Simulate ExploreAgent adding a log
         RaiseLogEntryAddedPublic(exploreAgent, new AgentLogEntry { Level = "INFO", Message = "探索中..." });
 
-        capturedLog.Should().NotBeNull();
-        capturedLog!.Message.Should().Contain("[Explore]");
-        capturedLog.Message.Should().Contain("探索中...");
+        // OnExploreLog adds to _logs with [Explore] prefix but does NOT fire LogEntryAdded
+        // (by design, to avoid duplicate UI output)
+        var logs = agent.GetLogs();
+        logs.Should().NotBeEmpty();
+        logs.Should().Contain(l => l.Message.Contains("[Explore]") && l.Message.Contains("探索中..."));
     }
 
     #endregion
