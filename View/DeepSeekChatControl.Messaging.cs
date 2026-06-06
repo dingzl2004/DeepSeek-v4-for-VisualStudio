@@ -1188,41 +1188,114 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     // ── 主流程移交处理：request_handoff 触发的 _pendingHandoff 在此执行 ──
                     if (_pendingHandoff != null && _activeAgent != null && _agentFactory != null)
                     {
-                        Logger.Info($"[MainFlow] 执行移交 → {_pendingHandoff.TargetAgent} ({_pendingHandoff.Label})");
+                        Logger.Info($"[MainFlow] 移交 → {_pendingHandoff.TargetAgent} ({_pendingHandoff.Label}), AutoSend={_pendingHandoff.AutoSend}, ShowContinueOn={_pendingHandoff.ShowContinueOn}");
                         var handoff = _pendingHandoff;
                         _pendingHandoff = null; // 防止重复执行
 
-                        // 构建上下文并执行移交
-                        var handoffContext = new AgentContext
+                        // ── ShowContinueOn 模式：注入"开始实现"按钮，不自动执行 ──
+                        if (handoff.ShowContinueOn)
                         {
-                            SolutionPath = _solutionPath,
-                            ConversationHistory = _contextManager.GetConversationHistory(),
-                            ContextManager = _contextManager,
-                            CancellationToken = CancellationToken.None,
-                        };
-
-                        _ = Task.Run(async () =>
-                        {
+                            // 保存 handoff 引用以便后续按钮点击时使用
+                            _pendingHandoff = handoff;
+                            lock (_lock)
+                            {
+                                if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
+                                {
+                                    try
+                                    {
+                                        _messages[assistantMsgIndex].HandoffJson = JsonSerializer.Serialize(
+                                            handoff, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                                    }
+                                    catch { }
+                                }
+                            }
+                            // 注入 Handoff 按钮 JS
                             try
                             {
-                                var handoffResult = await _activeAgent.ExecuteHandoffAsync(handoff, handoffContext, _activePlan, _agentFactory);
-                                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                                // 移交结果由 Agent 流程的 RunAgentWorkflowAsync 后续处理
-                                Logger.Info($"[MainFlow] 移交执行完成: → {handoff.TargetAgent}");
+                                string handoffBtnJs = ChatHtmlService.BuildHandoffButtonJs(
+                                    assistantMsgIndex, handoff.TargetAgent.ToString(), handoff.Label);
+                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(handoffBtnJs);
                             }
                             catch (Exception ex)
                             {
-                                Logger.Error($"[MainFlow] 移交执行失败: {ex.Message}", ex);
+                                Logger.Warn($"[MainFlow] Handoff 按钮注入失败: {ex.Message}");
                             }
-                            finally
+                            Logger.Info($"[MainFlow] Handoff 按钮已注入 (ShowContinueOn)，等待用户点击");
+                        }
+                        else
+                        {
+                            // ── AutoSend 模式：自动执行 Handoff 并渲染结果 ──
+                            var handoffContext = new AgentContext
                             {
-                                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                                lock (_lock) { _isGenerating = false; }
-                                UpdateButtonsState();
-                                StatusLabel.Text = LocalizationService.Instance["status.ready"];
+                                SolutionPath = _solutionPath,
+                                ConversationHistory = _contextManager.GetConversationHistory(),
+                                ContextManager = _contextManager,
+                                CancellationToken = CancellationToken.None,
+                            };
+
+                            try
+                            {
+                                // 创建新的助手消息气泡用于显示 Handoff 执行结果
+                                var handoffMsg = new ChatMessage
+                                {
+                                    Role = "assistant",
+                                    Content = $"🔄 {handoff.TargetAgent}: {LocalizationService.Instance["agent.status.analyzing"]}",
+                                    ReasoningContent = string.Empty,
+                                    Timestamp = DateTime.Now,
+                                    IsStreaming = true,
+                                    IsRendered = false,
+                                    AgentType = handoff.TargetAgent,
+                                };
+                                int handoffMsgIndex;
+                                lock (_lock)
+                                {
+                                    _messages.Add(handoffMsg);
+                                    handoffMsgIndex = _messages.Count - 1;
+                                }
+                                AddMessagesHtml("assistant", handoffMsg.Content);
+                                UpdateBrowser();
+
+                                // 执行 Handoff
+                                Logger.Info($"[MainFlow] 自动执行 Handoff → {handoff.TargetAgent}");
+                                var handoffResult = await _activeAgent.ExecuteHandoffAsync(
+                                    handoff, handoffContext, _activePlan, _agentFactory);
+
+                                // 渲染结果
+                                string resultContent;
+                                if (!string.IsNullOrWhiteSpace(handoffResult.Content))
+                                {
+                                    resultContent = handoffResult.Content;
+                                }
+                                else if (handoffResult.Success)
+                                {
+                                    resultContent = $"✅ {handoff.TargetAgent} 执行完成。";
+                                }
+                                else
+                                {
+                                    resultContent = $"❌ {handoff.TargetAgent} 执行失败: {handoffResult.ErrorMessage}";
+                                }
+
+                                lock (_lock)
+                                {
+                                    if (handoffMsgIndex >= 0 && handoffMsgIndex < _messages.Count)
+                                    {
+                                        var msg = _messages[handoffMsgIndex];
+                                        msg.Content = resultContent;
+                                        msg.IsStreaming = false;
+                                        msg.IsRendered = true;
+                                    }
+                                }
+                                BatchStreamingUpdate(handoffMsgIndex, resultContent, string.Empty, isComplete: true);
+                                PostStreamEnd(handoffMsgIndex, resultContent, string.Empty);
+
+                                _contextManager.AddAssistantMessage(resultContent);
+                                Logger.Info($"[MainFlow] Handoff 执行完成: → {handoff.TargetAgent}, 内容长度={resultContent.Length}");
                             }
-                        });
-                        return; // 移交在后台执行，当前消息流结束
+                            catch (Exception ex)
+                            {
+                                Logger.Error($"[MainFlow] Handoff 执行失败: {ex.Message}", ex);
+                            }
+                        }
                     }
 
                     // ── AI 自动生成会话标题（首轮对话完成后触发） ──
