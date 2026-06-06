@@ -995,7 +995,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 Logger.Info($"[Cache]   累计未命中: {totalMiss:N0} tokens");
                 Logger.Info($"[Cache]   累计 Prompt: {(_apiService?.TotalPromptTokens ?? 0):N0} tokens");
                 Logger.Info($"[Cache]   累计 Completion: {(_apiService?.TotalCompletionTokens ?? 0):N0} tokens");
-                Logger.Info($"[Cache]   节省比例: {aggregateRate * 100:F1}% (DeepSeek Cache 对命中 token 仅按 $0.014/M 计费)");
                 Logger.Info($"[Cache] ═══════════════════════════════════════");
             }
             catch (Exception ex)

@@ -568,7 +568,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
         /// <summary>
         /// 格式化当前会话的 token 消耗信息。
-        /// 包含：API 实际 Token 消耗 + 上下文窗口利用率。
+        /// 包含：API 实际 Token 消耗 + 费用估算 + 上下文窗口利用率。
+        /// 费用基于 DeepSeek V4 官方定价（¥/百万 tokens）：
+        ///   Flash: 输入 ¥1/M（缓存未命中）/ ¥0.02/M（缓存命中），输出 ¥2/M
+        ///   Pro:   输入 ¥3/M（缓存未命中）/ ¥0.025/M（缓存命中），输出 ¥6/M
         /// </summary>
         private string FormatSessionConsumption()
         {
@@ -576,13 +579,15 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             long promptTokens = _apiService.TotalPromptTokens;
             long completionTokens = _apiService.TotalCompletionTokens;
+            long cacheHitTokens = _apiService.TotalCacheHitTokens;
+            long cacheMissTokens = _apiService.TotalCacheMissTokens;
             long totalTokens = promptTokens + completionTokens;
 
             bool isChinese = LocalizationService.Instance.CurrentLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
 
             string FormatTokens(long n) => n >= 1000 ? $"{n / 1000.0:F1}K" : n.ToString();
 
-            // ── API 消耗部分 ──
+            // ── API 消耗 + 费用部分 ──
             string apiPart;
             if (totalTokens == 0)
             {
@@ -590,9 +595,29 @@ namespace DeepSeek_v4_for_VisualStudio.View
             }
             else
             {
+                // 计算费用
+                string modelName = _options?.SelectedModel ?? "deepseek-v4-pro";
+                bool isFlash = modelName.Contains("flash", StringComparison.OrdinalIgnoreCase);
+                double inputCacheMissPrice = isFlash ? 1.0 : 3.0;
+                double inputCacheHitPrice = isFlash ? 0.02 : 0.025;
+                double outputPrice = isFlash ? 2.0 : 6.0;
+
+                double inputCacheMissCost = (cacheMissTokens / 1_000_000.0) * inputCacheMissPrice;
+                double inputCacheHitCost = (cacheHitTokens / 1_000_000.0) * inputCacheHitPrice;
+                double outputCost = (completionTokens / 1_000_000.0) * outputPrice;
+                double totalCost = inputCacheMissCost + inputCacheHitCost + outputCost;
+
+                string costStr = totalCost >= 0.01
+                    ? $"¥{totalCost:F2}"
+                    : totalCost > 0
+                        ? $"¥{totalCost:F4}"
+                        : "¥0";
+
+                string modelLabel = isFlash ? "Flash" : "Pro";
+
                 apiPart = isChinese
-                    ? $"📊 本会话: 输入 {FormatTokens(promptTokens)} tokens, 输出 {FormatTokens(completionTokens)} tokens"
-                    : $"📊 Session: {FormatTokens(promptTokens)} in, {FormatTokens(completionTokens)} out";
+                    ? $"📊 本会话: 入 {FormatTokens(promptTokens)} 出 {FormatTokens(completionTokens)} · {modelLabel} {costStr}"
+                    : $"📊 Session: {FormatTokens(promptTokens)} in, {FormatTokens(completionTokens)} out · {modelLabel} {costStr}";
             }
 
             // ── 上下文窗口利用率（仅在有对话内容时显示）──
