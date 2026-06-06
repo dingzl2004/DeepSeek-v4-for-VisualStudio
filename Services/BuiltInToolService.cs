@@ -118,6 +118,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 rft.ActiveFileTracker = _activeFileTracker;
         }
 
+        /// <summary>
+        /// 工具结果裁剪器（可选注入）。
+        /// Agent 工具循环和 ContextManager 共享同一实例。
+        /// </summary>
+        public IToolResultCompactor? ToolResultCompactor { get; set; }
+
         public BuiltInToolService(
             McpManagerService? mcpManager = null,
             WebSearchService? webSearchService = null,

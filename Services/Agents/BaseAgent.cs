@@ -760,10 +760,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         var tc = toolCalls[i];
                         string toolResult = toolResults[i];
 
+                        // ── 裁剪工具结果以保护上下文（与 ContextManager.AddToolResult 保持一致）──
+                        string contextResult = CompactToolResultForAgent(tc.Function.Name, toolResult);
+
                         messages.Add(new ChatApiMessage
                         {
                             Role = "tool",
-                            Content = toolResult,
+                            Content = contextResult,
                             ToolCallId = tc.Id,
                             Name = tc.Function.Name
                         });
@@ -2099,6 +2102,28 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
+        /// 裁剪工具结果（Agent 工具循环内部使用）。
+        /// 与 ConversationContextManager.AddToolResult 使用同一裁剪器实例，
+        /// 确保 messages 列表和 _entries 历史中的内容一致。
+        /// </summary>
+        private string CompactToolResultForAgent(string toolName, string rawResult)
+        {
+            try
+            {
+                var compactor = BuiltInTools?.ToolResultCompactor;
+                if (compactor == null || string.IsNullOrEmpty(rawResult))
+                    return rawResult ?? string.Empty;
+
+                string model = Context?.ContextManager?.CurrentModel ?? "deepseek-v4";
+                return compactor.CompactToolResultForContext(toolName, rawResult, model);
+            }
+            catch
+            {
+                return rawResult ?? string.Empty;
+            }
+        }
+
+        /// <summary>
         /// 判断工具是否为写操作（编辑/创建/删除文件）。
         /// </summary>
         private static bool IsWriteTool(string toolName)
@@ -2111,6 +2136,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 "multi_replace_in_file" => true,
                 "delete_file" => true,
                 "apply_patch" => true,
+                "create_directory" => true,
                 _ => false,
             };
         }
@@ -2181,7 +2207,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
-        /// 从工具参数 JSON 中提取目标文件路径（支持 filePath/path/file 字段）。
+        /// 从工具参数 JSON 中提取目标文件路径（支持多种字段名和集合类型）。
+        /// 覆盖所有文件相关工具的参数模式。
         /// </summary>
         private static string? ExtractFilePathFromToolArgs(string toolName, string argumentsJson)
         {
@@ -2192,13 +2219,36 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 using var doc = JsonDocument.Parse(argumentsJson);
                 var root = doc.RootElement;
 
-                // 通用路径字段（优先级从高到低）
-                if (root.TryGetProperty("filePath", out var fp) && fp.ValueKind == JsonValueKind.String)
-                    return fp.GetString();
-                if (root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
-                    return p.GetString();
-                if (root.TryGetProperty("file", out var f) && f.ValueKind == JsonValueKind.String)
-                    return f.GetString();
+                // ── 单文件路径字段（优先级从高到低）──
+                string[] singlePathKeys = { "filePath", "path", "file", "dirPath", "target" };
+                foreach (var key in singlePathKeys)
+                {
+                    if (root.TryGetProperty(key, out var prop) && prop.ValueKind == JsonValueKind.String)
+                    {
+                        string? val = prop.GetString();
+                        if (!string.IsNullOrWhiteSpace(val)) return val;
+                    }
+                }
+
+                // ── 多文件路径数组（取第一个为代表）──
+                string[] arrayPathKeys = { "paths", "files", "targets", "filePaths" };
+                foreach (var key in arrayPathKeys)
+                {
+                    if (root.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array && arr.GetArrayLength() > 0)
+                    {
+                        var first = arr[0];
+                        if (first.ValueKind == JsonValueKind.String)
+                        {
+                            string? val = first.GetString();
+                            if (!string.IsNullOrWhiteSpace(val)) return val;
+                        }
+                    }
+                }
+
+                // ── 编辑类工具的 special 字段 ──
+                // replace_in_file: oldFilePath → 返回 filePath（主文件）
+                // apply_patch: filePath 已被覆盖
+                // create_directory: dirPath 已被覆盖
             }
             catch { }
             return null;

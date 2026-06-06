@@ -517,8 +517,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // ── 活跃文件 Working Set（新增，放在压缩摘要之后）──
             if (_activeFileTracker != null)
             {
-                string activeFileSummary = _activeFileTracker.GetActiveFileSummary(
-                    _workspaceRoot ?? string.Empty);
+                string wsRoot = !string.IsNullOrWhiteSpace(_workspaceRoot)
+                    ? _workspaceRoot
+                    : Environment.CurrentDirectory;
+                string activeFileSummary = _activeFileTracker.GetActiveFileSummary(wsRoot);
                 if (!string.IsNullOrWhiteSpace(activeFileSummary))
                     parts.Add(activeFileSummary);
             }
