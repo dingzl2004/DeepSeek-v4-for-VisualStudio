@@ -259,6 +259,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
         // ── Agent 实时思考气泡 ──
         private int _agentStreamingMsgIndex = -1;
         private readonly StringBuilder _agentThinkingContent = new();
+        private readonly StringBuilder _streamingReasoning = new();
         private int _lastReportedStepIndex;
         private string _lastReportedStepStatus = string.Empty;
 

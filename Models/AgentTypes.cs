@@ -189,6 +189,13 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// </summary>
         [JsonIgnore]
         public string? CodeMemory { get; set; }
+
+        /// <summary>
+        /// 实时推理流回调。Agent 内部每收到一个 thinking chunk 时调用，
+        /// 供 UI 层实时流式更新思考面板。
+        /// </summary>
+        [JsonIgnore]
+        public Action<string>? OnThinkingChunk { get; set; }
     }
 
     /// <summary>

@@ -264,6 +264,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     onThinking: (thinking) =>
                     {
                         thinkingContent += thinking;
+                        context.OnThinkingChunk?.Invoke(thinking);
                     },
                     onContent: (content) =>
                     {

@@ -127,7 +127,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 }
 
                 // ── 重置思考内容，为 Edit 阶段准备新的实时气泡 ──
-                lock (_lock) { _agentThinkingContent.Clear(); }
+                lock (_lock) { _agentThinkingContent.Clear(); _streamingReasoning.Clear(); }
                 _lastReportedStepIndex = 0;
                 _lastReportedStepStatus = string.Empty;
 
@@ -167,6 +167,31 @@ namespace DeepSeek_v4_for_VisualStudio.View
                             return await Task.Run(() => File.ReadAllText(path));
                         return null;
                     },
+                };
+
+                // ── 设置实时推理流回调 ──
+                var capturedRetryMsgIdx = _agentStreamingMsgIndex;
+                context.OnThinkingChunk = (chunk) =>
+                {
+                    lock (_lock) { _streamingReasoning.Append(chunk); }
+                    _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                    {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        if (ChatWebView.CoreWebView2 == null || capturedRetryMsgIdx < 0) return;
+                        try
+                        {
+                            string reasoning;
+                            string content;
+                            lock (_lock)
+                            {
+                                reasoning = _streamingReasoning.ToString();
+                                var msg = capturedRetryMsgIdx < _messages.Count ? _messages[capturedRetryMsgIdx] : null;
+                                content = msg?.Content ?? string.Empty;
+                            }
+                            BatchStreamingUpdate(capturedRetryMsgIdx, content, reasoning);
+                        }
+                        catch { }
+                    });
                 };
 
                 // ── 恢复 Plan: 从持久化的 PlanJson 中重建 ActivePlan ──
@@ -389,7 +414,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         {
                             var msg = _messages[_agentStreamingMsgIndex];
                             msg.Content = persistedContent;
-                            msg.ReasoningContent = agentResult.ReasoningContent;
+                            msg.ReasoningContent = _streamingReasoning.ToString();
                             msg.IsStreaming = false;
                             msg.IsRendered = true;
                             // ── 持久化任务计划 JSON，重启后可重建任务面板 ──
@@ -403,7 +428,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     }
 
                     // ── 强制刷新 DOM 显示最终结果 ──
-                    string reasoningForRender = agentResult.ReasoningContent ?? string.Empty;
+                    string reasoningForRender;
+                    lock (_lock) { reasoningForRender = _streamingReasoning.ToString(); }
                     BatchStreamingUpdate(_agentStreamingMsgIndex, persistedContent, reasoningForRender, isComplete: true);
 
                     // ── 发送最终渲染：extraFooter 中注入执行过程 HTML + 缓存统计（纯 HTML，不经过 Markdown 转义）──
