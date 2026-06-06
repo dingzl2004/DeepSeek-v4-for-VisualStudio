@@ -177,6 +177,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 agent.McpManager = _mcpManager;
             if (agent.MemoryService == null && _memoryService != null)
                 agent.MemoryService = _memoryService;
+            // ── 注入 ExploreAgent 引用（修复：AskAgent 等通过属性访问器获取时缺失 ExploreAgent 注入）──
+            if (agent.ExploreAgent == null)
+                agent.ExploreAgent = ExploreAgent;
         }
 
         /// <summary>

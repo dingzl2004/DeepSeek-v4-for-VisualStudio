@@ -40,6 +40,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _apiService = new DeepSeekApiService(_options.ApiKey, _options.SelectedModel);
             _apiService.ConfigureThinking(_options.IsThinkingEnabled, _options.ReasoningEffort);
 
+            // ── 注入前缀缓存管理器（修复：直接 new 的 ApiService 缺少 DI 注入的 PrefixCache）──
+            _apiService.PrefixCache = new PrefixCacheManager();
+
             // ── 初始化/重建 Agent 工厂（ApiService 重建时必须同步重建）──
             if (_agentFactory != null)
             {
