@@ -251,10 +251,11 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     Logger.Info($"[AgentHandoff] 从 PlanJson 恢复了计划: {restoredPlan.Steps.Count} 个步骤");
                 }
 
-                // ── 切换到 EditAgent 并绑定事件 ──
-                var editAgent = _agentFactory.EditAgent;
-                SwitchActiveAgent(editAgent, context);
-                editAgent.PlanUpdated += OnAgentPlanUpdated;
+                // ── 切换到目标 Agent 并绑定事件 ──
+                var handoffTargetAgent = _agentFactory.GetAgent(_pendingHandoff.TargetAgent);
+                SwitchActiveAgent(handoffTargetAgent, context);
+                if (handoffTargetAgent is EditAgent targetEditAgent)
+                    targetEditAgent.PlanUpdated += OnAgentPlanUpdated;
 
                 AgentResult agentResult;
                 try
@@ -263,7 +264,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 }
                 finally
                 {
-                    editAgent.PlanUpdated -= OnAgentPlanUpdated;
+                    if (handoffTargetAgent is EditAgent ea)
+                        ea.PlanUpdated -= OnAgentPlanUpdated;
                 }
 
                 _pendingHandoff = null; // 消费后清空原始 Handoff（Plan→Edit）
@@ -271,8 +273,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 // ── AutoSend 链式处理：EditAgent 返回的 Handoff（如 Edit→Build、Edit→Ask）
                 //    需要自动跟进执行。RunAgentWorkflowAsync 有同样的逻辑处理 Plan→Edit 链，
                 //    此处补充 Handoff 场景下的多层 AutoSend 链。 ──
+                int chainDepth = 0;
+                const int maxChainDepth = 10;
                 while (agentResult.Handoff != null && agentResult.Handoff.AutoSend)
                 {
+                    chainDepth++;
+                    if (chainDepth > maxChainDepth)
+                    {
+                        Logger.Warn($"[AgentHandoff] AutoSend 链达到最大深度 {maxChainDepth}，强制终止");
+                        break;
+                    }
                     var nextHandoff = agentResult.Handoff;
                     Logger.Info($"[AgentHandoff] AutoSend 链式跟进: → {nextHandoff.TargetAgent} ({nextHandoff.Label})");
 

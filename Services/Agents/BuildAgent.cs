@@ -176,8 +176,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     result.Handoff = ConvertHandoffRequestToHandoff(PendingHandoffRequest);
                 }
                 // ── 携带计划上下文，链回 Ask Agent 生成最终变更总结 ──
-                else if (context.ActivePlan != null && context.ActivePlan.IsCompleted
-                    && context.ActivePlan.ChangedFiles.Count > 0)
+                else if (context.ActivePlan != null && context.ActivePlan.IsCompleted)
                 {
                     result.Plan = context.ActivePlan;
                     result.FileChanges = context.ActivePlan.ChangedFiles;
@@ -189,6 +188,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         Label = L["agent.edit.handoffAskLabel"],
                         TargetAgent = AgentType.Ask,
                         Prompt = summaryPrompt,
+                        AutoSend = true,
+                        ShowContinueOn = false,
+                    };
+                }
+                else
+                {
+                    // ── 无计划上下文时也移交 Ask 生成总结 ──
+                    result.Handoff = new AgentHandoff
+                    {
+                        Label = L["agent.edit.handoffAskLabel"],
+                        TargetAgent = AgentType.Ask,
+                        Prompt = L["agent.build.handoffAskPrompt"] ?? "请总结以上构建结果。",
                         AutoSend = true,
                         ShowContinueOn = false,
                     };

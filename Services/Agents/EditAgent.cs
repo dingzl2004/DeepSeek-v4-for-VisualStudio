@@ -131,7 +131,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         TargetAgent = AgentType.Build,
                         Prompt = LocalizationService.Instance["agent.edit.handoffBuildPrompt"],
                         AutoSend = true,
-                        ShowContinueOn = true,
+                        ShowContinueOn = false,
                     },
                 },
                 SystemPrompt = BuildSystemPrompt(),
@@ -216,6 +216,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             // ── 传递累积累的推理内容供 UI 渲染思考面板 ──
             if (!string.IsNullOrEmpty(_accumulatedReasoning))
                 result.ReasoningContent = _accumulatedReasoning;
+
+            // ── 构建执行结果摘要（Content），使 Handoff 合并时 UI 可见执行结果 ──
+            result.Content = BuildExecutionSummary(result.Plan);
 
             result.Logs.AddRange(_logs);
             return result;
@@ -2120,6 +2123,66 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 AutoSend = true,
                 ShowContinueOn = false,
             };
+        }
+
+        /// <summary>
+        /// 构建执行结果摘要（用于 AgentResult.Content，使 Handoff 合并时 UI 可见执行结果）。
+        /// 与 BuildSummaryHandoff 不同，此摘要面向用户展示（而非作为 Agent prompt）。
+        /// </summary>
+        private string BuildExecutionSummary(AgentTaskPlan? plan)
+        {
+            if (plan == null) return string.Empty;
+
+            var L = LocalizationService.Instance;
+            var sb = new StringBuilder();
+
+            // 步骤完成情况
+            if (plan.Steps.Count > 0)
+            {
+                int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
+                int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
+                int skipped = plan.Steps.Count(s => s.Status == AgentStepStatus.Skipped);
+
+                sb.Append($"📊 **{plan.Title}**: ");
+                sb.Append($"✅ {completed} / ❌ {failed} / ⏭️ {skipped}");
+                sb.AppendLine();
+            }
+
+            // 文件变更
+            if (plan.ChangedFiles.Count > 0)
+            {
+                var mergedFiles = plan.ChangedFiles
+                    .GroupBy(c => NormalizePath(c.FilePath), StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new
+                    {
+                        FileName = Path.GetFileName(g.First().FilePath),
+                        LinesAdded = g.Sum(c => c.LinesAdded),
+                        LinesRemoved = g.Sum(c => c.LinesRemoved),
+                    })
+                    .ToList();
+
+                sb.AppendLine($"📝 **{L["edit.summary.fileCount"]}**: {mergedFiles.Count} 个");
+                foreach (var file in mergedFiles)
+                {
+                    sb.AppendLine($"  - `{file.FileName}` (+{file.LinesAdded} -{file.LinesRemoved})");
+                }
+            }
+            else
+            {
+                sb.AppendLine($"📝 **{L["edit.summary.fileCount"]}**: 0");
+            }
+
+            // 构建结果
+            if (HasBuildWarningsInLogs())
+            {
+                sb.AppendLine("🔨 **编译**: ⚠️ 存在问题，请查看上方详情");
+            }
+            else
+            {
+                sb.AppendLine("🔨 **编译**: ✅ 通过");
+            }
+
+            return sb.ToString().TrimEnd();
         }
 
         #endregion

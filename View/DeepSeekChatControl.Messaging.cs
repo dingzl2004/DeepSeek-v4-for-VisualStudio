@@ -1186,61 +1186,79 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     _contextManager.AddAssistantMessage(contentBuffer.ToString(), reasoningBuffer.Length > 0 ? reasoningBuffer.ToString() : null);
 
                     // ── 主流程移交处理：request_handoff 触发的 _pendingHandoff 在此执行 ──
+                    // ── 支持 Handoff 链：Ask→Edit→Build→Ask，自动跟进 AutoSend 移交，
+                    //     遇到 ShowContinueOn 时注入按钮并中断链，等待用户点击。 ──
                     if (_pendingHandoff != null && _activeAgent != null && _agentFactory != null)
                     {
-                        Logger.Info($"[MainFlow] 移交 → {_pendingHandoff.TargetAgent} ({_pendingHandoff.Label}), AutoSend={_pendingHandoff.AutoSend}, ShowContinueOn={_pendingHandoff.ShowContinueOn}");
-                        var handoff = _pendingHandoff;
+                        var currentHandoff = _pendingHandoff;
                         _pendingHandoff = null; // 防止重复执行
 
-                        // ── ShowContinueOn 模式：注入"开始实现"按钮，不自动执行 ──
-                        if (handoff.ShowContinueOn)
+                        var handoffContext = new AgentContext
                         {
-                            // 保存 handoff 引用以便后续按钮点击时使用
-                            _pendingHandoff = handoff;
-                            lock (_lock)
+                            SolutionPath = _solutionPath,
+                            ConversationHistory = _contextManager.GetConversationHistory(),
+                            ContextManager = _contextManager,
+                            CancellationToken = CancellationToken.None,
+                        };
+
+                        // ── 累积 Handoff 链的内容和推理 ──
+                        var mergedContentBuilder = new StringBuilder(assistantMsg.Content ?? string.Empty);
+                        var mergedReasoningBuilder = new StringBuilder(assistantMsg.ReasoningContent ?? string.Empty);
+                        int handoffChainRounds = 0;
+                        const int maxHandoffChainDepth = 10;
+                        bool chainCompleted = false;
+
+                        try
+                        {
+                            while (currentHandoff != null && !chainCompleted)
                             {
-                                if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
+                                handoffChainRounds++;
+                                if (handoffChainRounds > maxHandoffChainDepth)
                                 {
+                                    Logger.Warn($"[MainFlow] Handoff 链达到最大深度 {maxHandoffChainDepth}，强制终止");
+                                    break;
+                                }
+                                Logger.Info($"[MainFlow] Handoff 链 #{handoffChainRounds}: → {currentHandoff.TargetAgent} ({currentHandoff.Label}), AutoSend={currentHandoff.AutoSend}, ShowContinueOn={currentHandoff.ShowContinueOn}");
+
+                                // ── ShowContinueOn 模式：注入按钮，中断链式执行 ──
+                                if (currentHandoff.ShowContinueOn)
+                                {
+                                    _pendingHandoff = currentHandoff;
+                                    lock (_lock)
+                                    {
+                                        if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
+                                        {
+                                            try
+                                            {
+                                                _messages[assistantMsgIndex].HandoffJson = JsonSerializer.Serialize(
+                                                    currentHandoff, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                                            }
+                                            catch { }
+                                        }
+                                    }
                                     try
                                     {
-                                        _messages[assistantMsgIndex].HandoffJson = JsonSerializer.Serialize(
-                                            handoff, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                                        string handoffBtnJs = ChatHtmlService.BuildHandoffButtonJs(
+                                            assistantMsgIndex, currentHandoff.TargetAgent.ToString(), currentHandoff.Label);
+                                        await ChatWebView.CoreWebView2.ExecuteScriptAsync(handoffBtnJs);
                                     }
-                                    catch { }
+                                    catch (Exception ex)
+                                    {
+                                        Logger.Warn($"[MainFlow] Handoff 按钮注入失败: {ex.Message}");
+                                    }
+                                    Logger.Info($"[MainFlow] Handoff 链中断 (ShowContinueOn)，等待用户点击 → {currentHandoff.TargetAgent}");
+                                    break;
                                 }
-                            }
-                            // 注入 Handoff 按钮 JS
-                            try
-                            {
-                                string handoffBtnJs = ChatHtmlService.BuildHandoffButtonJs(
-                                    assistantMsgIndex, handoff.TargetAgent.ToString(), handoff.Label);
-                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(handoffBtnJs);
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.Warn($"[MainFlow] Handoff 按钮注入失败: {ex.Message}");
-                            }
-                            Logger.Info($"[MainFlow] Handoff 按钮已注入 (ShowContinueOn)，等待用户点击");
-                        }
-                        else
-                        {
-                            // ── AutoSend 模式：自动执行 Handoff，结果合并到当前 Assist 气泡 ──
-                            var handoffContext = new AgentContext
-                            {
-                                SolutionPath = _solutionPath,
-                                ConversationHistory = _contextManager.GetConversationHistory(),
-                                ContextManager = _contextManager,
-                                CancellationToken = CancellationToken.None,
-                            };
 
-                            try
-                            {
-                                // 执行 Handoff
-                                Logger.Info($"[MainFlow] 自动执行 Handoff → {handoff.TargetAgent}");
+                                // ── 刷新上下文中的对话历史 ──
+                                handoffContext.ConversationHistory = _contextManager.GetConversationHistory();
+
+                                // ── 执行当前 Handoff ──
+                                Logger.Info($"[MainFlow] 执行 Handoff → {currentHandoff.TargetAgent}");
                                 var handoffResult = await _activeAgent.ExecuteHandoffAsync(
-                                    handoff, handoffContext, _activePlan, _agentFactory);
+                                    currentHandoff, handoffContext, _activePlan, _agentFactory);
 
-                                // 构建 Handoff 结果内容，合并到当前 Assist 气泡后面
+                                // ── 构建当前 Handoff 结果内容 ──
                                 string handoffContent;
                                 if (!string.IsNullOrWhiteSpace(handoffResult.Content))
                                 {
@@ -1248,46 +1266,87 @@ namespace DeepSeek_v4_for_VisualStudio.View
                                 }
                                 else if (handoffResult.Success)
                                 {
-                                    handoffContent = $"\n\n---\n\n✅ {handoff.TargetAgent} 执行完成。";
+                                    handoffContent = $"\n\n---\n\n✅ {currentHandoff.TargetAgent} 执行完成。";
                                 }
                                 else
                                 {
-                                    handoffContent = $"\n\n---\n\n❌ {handoff.TargetAgent} 执行失败: {handoffResult.ErrorMessage}";
+                                    handoffContent = $"\n\n---\n\n❌ {currentHandoff.TargetAgent} 执行失败: {handoffResult.ErrorMessage}";
                                 }
 
-                                // 更新现有 Assist 消息内容
-                                string updatedContent = assistantMsg.Content + handoffContent;
-                                assistantMsg.Content = updatedContent;
+                                mergedContentBuilder.Append(handoffContent);
 
-                                // ── 合并 Handoff 目标 Agent 的推理内容 ──
-                                string mergedReasoning = assistantMsg.ReasoningContent ?? string.Empty;
+                                // ── 合并推理内容 ──
                                 if (!string.IsNullOrEmpty(handoffResult.ReasoningContent))
                                 {
-                                    mergedReasoning = string.IsNullOrEmpty(mergedReasoning)
-                                        ? handoffResult.ReasoningContent
-                                        : mergedReasoning + "\n\n" + handoffResult.ReasoningContent;
+                                    if (mergedReasoningBuilder.Length > 0)
+                                        mergedReasoningBuilder.Append("\n\n");
+                                    mergedReasoningBuilder.Append(handoffResult.ReasoningContent);
                                 }
-                                assistantMsg.ReasoningContent = mergedReasoning;
-
-                                lock (_lock)
-                                {
-                                    if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
-                                    {
-                                        _messages[assistantMsgIndex].Content = updatedContent;
-                                        _messages[assistantMsgIndex].ReasoningContent = mergedReasoning;
-                                    }
-                                }
-                                BatchStreamingUpdate(assistantMsgIndex, updatedContent, mergedReasoning, isComplete: true);
-                                PostStreamEnd(assistantMsgIndex, updatedContent, mergedReasoning);
 
                                 _contextManager.AddAssistantMessage(handoffContent);
-                                Logger.Info($"[MainFlow] Handoff 执行完成，已合并到 Assist 气泡: → {handoff.TargetAgent}, 内容长度={handoffContent.Length}");
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.Error($"[MainFlow] Handoff 执行失败: {ex.Message}", ex);
+                                Logger.Info($"[MainFlow] Handoff 链 #{handoffChainRounds} 完成: → {currentHandoff.TargetAgent}, 内容长度={handoffContent.Length}");
+
+                                // ── 检查是否有下一个 Handoff ──
+                                if (handoffResult.Handoff != null)
+                                {
+                                    if (handoffResult.Handoff.AutoSend)
+                                    {
+                                        currentHandoff = handoffResult.Handoff;
+                                        Logger.Info($"[MainFlow] Handoff 链继续: → {currentHandoff.TargetAgent} (AutoSend)");
+                                    }
+                                    else if (handoffResult.Handoff.ShowContinueOn)
+                                    {
+                                        currentHandoff = handoffResult.Handoff;
+                                        Logger.Info($"[MainFlow] Handoff 链下一步: → {currentHandoff.TargetAgent} (ShowContinueOn)");
+                                        // 下一轮循环会检测到 ShowContinueOn 并注入按钮
+                                    }
+                                    else
+                                    {
+                                        currentHandoff = null;
+                                    }
+                                }
+                                else
+                                {
+                                    currentHandoff = null;
+                                    chainCompleted = true;
+                                }
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            Logger.Error($"[MainFlow] Handoff 链执行失败: {ex.Message}", ex);
+                        }
+
+                        // ── 更新 Assistant 消息 ──
+                        string finalContent = mergedContentBuilder.ToString();
+                        string finalReasoning = mergedReasoningBuilder.ToString();
+                        assistantMsg.Content = finalContent;
+                        assistantMsg.ReasoningContent = finalReasoning;
+
+                        lock (_lock)
+                        {
+                            if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
+                            {
+                                _messages[assistantMsgIndex].Content = finalContent;
+                                _messages[assistantMsgIndex].ReasoningContent = finalReasoning;
+                            }
+                        }
+
+                        BatchStreamingUpdate(assistantMsgIndex, finalContent, finalReasoning, isComplete: true);
+
+                        // ── 重建最终 Cache 命中率卡片（含全对话累计值 + Handoff 链轮次）──
+                        long finalTotalHit = _apiService?.TotalCacheHitTokens ?? 0;
+                        long finalTotalMiss = _apiService?.TotalCacheMissTokens ?? 0;
+                        long finalTotalPrompt = _apiService?.TotalPromptTokens ?? 0;
+                        long finalTotalCompletion = _apiService?.TotalCompletionTokens ?? 0;
+                        int totalRounds = round + handoffChainRounds;
+
+                        LogTotalCacheHitRate(totalRounds, finalTotalHit, finalTotalMiss, finalTotalPrompt, finalTotalCompletion);
+
+                        string finalCacheFooterHtml = ChatHtmlService.BuildCacheHitFooterHtml(
+                            finalTotalHit, finalTotalMiss, finalTotalPrompt, finalTotalCompletion, totalRounds);
+
+                        PostStreamEnd(assistantMsgIndex, finalContent, finalReasoning, finalCacheFooterHtml);
                     }
 
                     // ── AI 自动生成会话标题（首轮对话完成后触发） ──
