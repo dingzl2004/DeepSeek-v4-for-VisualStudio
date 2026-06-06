@@ -1478,6 +1478,58 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
+        /// 从对话历史中提取 runSubagent 工具调用结果，用于 Handoff 时传递给目标 Agent。
+        /// 去重并按内容截断（~8KB），避免目标 Agent 因 maxRecentTurns 限制丢失探索上下文。
+        /// </summary>
+        private static string ExtractRunSubagentResults(List<ChatApiMessage> conversationHistory)
+        {
+            if (conversationHistory == null || conversationHistory.Count == 0)
+                return string.Empty;
+
+            var seenHashes = new HashSet<string>();
+            var sb = new StringBuilder();
+            const int maxBytes = 8192;
+
+            foreach (var msg in conversationHistory)
+            {
+                if (msg.Role == "tool"
+                    && string.Equals(msg.Name, "runSubagent", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(msg.Content))
+                {
+                    // 去重：相同内容的 tool 结果只保留一份
+                    string hash = ComputeSimpleHash(msg.Content);
+                    if (!seenHashes.Add(hash))
+                        continue;
+
+                    if (sb.Length > 0)
+                        sb.AppendLine("\n---\n");
+                    sb.AppendLine(msg.Content.Truncate(2048));
+
+                    // 截断保护
+                    if (sb.Length > maxBytes)
+                    {
+                        sb.AppendLine("\n> ⚠️ 探索结果已截断（总量超限），完整内容见对话历史。");
+                        break;
+                    }
+                }
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// 简单哈希：用于 runSubagent 结果去重（不要求密码学强度）。
+        /// </summary>
+        private static string ComputeSimpleHash(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            int hash = 17;
+            foreach (char c in text)
+                hash = hash * 31 + c;
+            return hash.ToString("X8");
+        }
+
+        /// <summary>
         /// 将 HandoffRequest（AI 通过 request_handoff 工具发起的 JSON 移交）
         /// 转换为 AgentHandoff（供 UI 层使用的移交格式）。
         /// </summary>
@@ -1572,6 +1624,24 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 {
                     Logger.Warn($"[{Definition.Name}] 读取 plan.md 失败: {ex.Message}");
                 }
+            }
+
+            // ── 注入源 Agent 的探索结果（从对话历史中提取 runSubagent tool 结果）──
+            // Handoff 时 maxRecentTurns 限制可能导致目标 Agent 看不到源 Agent 的早期探索结果
+            string explorationContext = ExtractRunSubagentResults(context.ConversationHistory);
+            if (!string.IsNullOrWhiteSpace(explorationContext))
+            {
+                sb.AppendLine();
+                sb.AppendLine("## 🔍 前一 Agent 的探索结果");
+                sb.AppendLine(explorationContext);
+            }
+
+            // ── 注入跨步骤代码记忆（EditAgent 多步骤间持久化的关键代码片段）──
+            if (!string.IsNullOrWhiteSpace(context.CodeMemory))
+            {
+                sb.AppendLine();
+                sb.AppendLine("## 💾 代码记忆（跨步骤持久化）");
+                sb.AppendLine(context.CodeMemory);
             }
 
             string handoffMessage = sb.ToString();
