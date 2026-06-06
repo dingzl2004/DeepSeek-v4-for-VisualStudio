@@ -3,6 +3,7 @@ using DeepSeek_v4_for_VisualStudio.Utils;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -274,6 +275,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // ── 记录请求元数据 ──
             Logger.Info($"[API] 发送请求: {requestBodyBytes.Length / 1024}KB, 消息数={request.Messages.Count}, 工具数={tools?.Count ?? 0}, maxTokens={maxTokens}");
 
+            // ── 消息结构分解日志（诊断缓存命中率用）──
+            try
+            {
+                int sysCount = request.Messages.Count(m => m.Role == "system");
+                int userCount = request.Messages.Count(m => m.Role == "user");
+                int asstCount = request.Messages.Count(m => m.Role == "assistant");
+                int toolCount = request.Messages.Count(m => m.Role == "tool");
+                int asstWithToolCalls = request.Messages.Count(m => m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Count > 0);
+                Logger.Info($"[Cache] 消息结构: system={sysCount}, user={userCount}, assistant={asstCount}, tool={toolCount} (含工具调用={asstWithToolCalls})");
+            }
+            catch { }
+
             // ── 前缀缓存稳定性检查（v1.1.9）──
             //     在发送前对比 system prompt + tool catalog 的 SHA-256 指纹，
             //     检测前缀漂移并记录日志，保障 V4 自动前缀缓存命中率可观测。
@@ -282,7 +295,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 string? systemPrompt = request.Messages.Count > 0 && request.Messages[0].Role == "system"
                     ? request.Messages[0].Content
                     : null;
-                PrefixCache.CheckCurrentPrefix(systemPrompt, normalizedTools);
+                var driftInfo = PrefixCache.CheckCurrentPrefix(systemPrompt, normalizedTools);
+
+                // ── 追加诊断：记录当前请求的指纹，方便与后续请求对比 ──
+                if (!driftInfo.IsInitialPin)
+                {
+                    string driftTag = driftInfo.HasDrift ? "⚠️ 漂移" : "✅ 稳定";
+                    Logger.Info($"[Cache] 前缀指纹状态: {driftTag} | 稳定性={PrefixCache.StabilityRatio:P1} ({PrefixCache.StableChecks}/{PrefixCache.TotalChecks})");
+                }
+            }
+            else
+            {
+                Logger.Warn("[Cache] PrefixCache 未注入，无法进行前缀稳定性监控");
             }
 
             // ── HTTP 层重试（指数退避：1s, 2s, 4s；最多 3 次额外重试）──
@@ -459,6 +483,31 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // 流结束，刷出残余
             if (contentBatch.Length > 0)
                 yield return contentBatch.ToString();
+
+            // ── 流结束后记录本次 API 调用的 Cache 命中率（即时诊断）──
+            try
+            {
+                if (LastUsage != null)
+                {
+                    int hit = LastUsage.PromptCacheHitTokens;
+                    int miss = LastUsage.PromptCacheMissTokens;
+                    int cacheableTotal = hit + miss;
+                    if (cacheableTotal > 0)
+                    {
+                        double rate = (double)hit / cacheableTotal;
+                        string level = rate >= 0.95 ? "🟢" : rate >= 0.70 ? "🟡" : rate >= 0.30 ? "🟠" : "🔴";
+                        Logger.Info($"[Cache] {level} API调用完成: 命中率={rate * 100:F1}% (命中 {hit:N0} / 未命中 {miss:N0} / 可缓存 {cacheableTotal:N0} / prompt {LastUsage.PromptTokens:N0} tokens)");
+                    }
+                    else
+                    {
+                        Logger.Info($"[Cache] ⚪ API调用完成: 无可缓存数据 (prompt {LastUsage.PromptTokens:N0} tokens)");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Cache] 流结束后命中率记录异常: {ex.Message}");
+            }
             } // using(response) — 重试块闭合
         }
 

@@ -1280,10 +1280,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                if (ChatWebView.CoreWebView2 == null) return;
 
                 try
                 {
+                    if (ChatWebView.CoreWebView2 == null)
+                    {
+                        Logger.Warn($"[Agent] CoreWebView2 未就绪，无法注入问题 UI (共 {request.Questions.Count} 个问题)，自动跳过");
+                        _activeAgent?.RespondToQuestions(request.RequestId, "[]");
+                        return;
+                    }
+
                     string js = ChatHtmlService.BuildAskQuestionsJs(request);
                     StatusLabel.Text = string.Format(LocalizationService.Instance["status.questionsWaiting"],
                         request.Questions.Count);
