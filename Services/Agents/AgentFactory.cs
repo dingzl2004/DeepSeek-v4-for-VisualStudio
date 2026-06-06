@@ -120,7 +120,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             if (_planAgent != null) _planAgent.McpManager = mcpManager;
             if (_editAgent != null) _editAgent.McpManager = mcpManager;
             if (_buildAgent != null) _buildAgent.McpManager = mcpManager;
-            Logger.Info($"[AgentFactory] MCP 管理器已注入 (工具数: {mcpManager.AllTools.Count})");
+            if (mcpManager != null)
+            {
+                Logger.Info($"[AgentFactory] MCP 管理器已注入 (工具数: {mcpManager.AllTools.Count})");
+            }
+            else
+            {
+                Logger.Info("[AgentFactory] MCP 管理器已清除 (null)");
+            }
         }
 
         /// <summary>

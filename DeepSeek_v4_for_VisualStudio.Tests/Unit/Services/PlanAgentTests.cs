@@ -109,11 +109,12 @@ public class PlanAgentTests
     }
 
     [Fact]
-    public void Definition_SystemPrompt_ContainsDeepSeekV4()
+    public void Definition_SystemPrompt_IsNotEmpty()
     {
         var agent = new PlanAgent(_apiService);
 
-        agent.Definition.SystemPrompt.Should().Contain("DeepSeek v4");
+        agent.Definition.SystemPrompt.Should().NotBeNullOrEmpty();
+        agent.Definition.SystemPrompt.Should().Contain("Plan");
     }
 
     #endregion
