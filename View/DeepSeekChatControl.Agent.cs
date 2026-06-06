@@ -386,8 +386,20 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     });
                 };
 
-                // ── 绑定事件到活跃 Agent ──
-                BindAgentEvents(_activeAgent);
+                // ── 显式路由 Agent 切换：@plan/@edit/@build/@explore 时切换到目标 Agent ──
+                //    修复：此前 @agent 路由仅设置 context 标志但实际仍在 AskAgent 执行，
+                //         导致 PlanAgent 等从未被使用，且 IsExplicitRoute 阻止移交。
+                if (routing != null && routing.IsExplicit && routing.TargetAgent != AgentType.Ask
+                    && _activeAgent.Definition.Type != routing.TargetAgent)
+                {
+                    var targetAgent = _agentFactory.GetAgent(routing.TargetAgent);
+                    SwitchActiveAgent(targetAgent, context);
+                }
+                else
+                {
+                    // ── 绑定事件到活跃 Agent ──
+                    BindAgentEvents(_activeAgent);
+                }
                 if (_agentFactory.EditAgent is EditAgent editAgent)
                     editAgent.PlanUpdated += OnAgentPlanUpdated;
 
