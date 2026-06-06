@@ -1138,27 +1138,29 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                         AddLog("INFO", $"[{Definition.Name}] → ExploreAgent: {ctx.Description}");
 
-                        // ── 转发 ExploreAgent 日志到父 Agent，但只写 _logs 不触发事件
-                        //    避免三重日志：Explore 已通过自身事件输出到 UI
-                        Action<AgentLogEntry> forwardLog = (entry) =>
-                        {
-                            _logs.Add(new AgentLogEntry
-                            {
-                                Level = entry.Level,
-                                Message = $"[Explore] {entry.Message.Truncate(200)}"
-                            });
-                            // 也写入 Logger 以便调试
-                            Logger.Info($"[{Definition.Name}][Explore] {entry.Message.Truncate(200)}");
-                        };
-                        ExploreAgent.LogEntryAdded += forwardLog;
-                        AgentResult exploreResult;
+                        // ── 不再通过 LogEntryAdded 事件转发 Explore 日志（并行 runSubagent 会导致重复订阅）
+                        //    改为在 Explore 完成后从 exploreResult.Logs 批量导入。 ──
+                        AgentResult? exploreResult = null;
                         try
                         {
                             exploreResult = await ExploreAgent.ExecuteAsync(ctx.Prompt, exploreCtx);
                         }
                         finally
                         {
-                            ExploreAgent.LogEntryAdded -= forwardLog;
+                            // ── 导入 ExploreAgent 的日志到父 Agent 的 _logs ──
+                            if (exploreResult != null && exploreResult.Logs.Count > 0)
+                            {
+                                foreach (var log in exploreResult.Logs)
+                                {
+                                    _logs.Add(new AgentLogEntry
+                                    {
+                                        Level = log.Level,
+                                        Message = $"[Explore] {log.Message.Truncate(200)}"
+                                    });
+                                }
+                                // 记录一条汇总日志（避免海量子日志淹没输出）
+                                Logger.Info($"[{Definition.Name}][Explore] ExploreAgent 完成: {exploreResult.Logs.Count} 条日志, {exploreResult.Content?.Length ?? 0} 字符结果");
+                            }
                         }
 
                         // ── 回收 ExploreAgent 的缓存到当前 Context ──

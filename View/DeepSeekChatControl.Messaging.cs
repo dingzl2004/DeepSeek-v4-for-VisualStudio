@@ -1266,10 +1266,36 @@ namespace DeepSeek_v4_for_VisualStudio.View
                                 assistantMsg.Content = interimContent;
                                 BatchStreamingUpdate(assistantMsgIndex, interimContent, interimReasoning, isComplete: false);
 
+                                // ── 绑定目标 Agent 的实时日志，刷新 UI 进度（节流：每秒最多一次）──
+                                var targetAgent = _agentFactory.GetAgent(currentHandoff.TargetAgent);
+                                string lastLogLine = "";
+                                DateTime lastLogUpdate = DateTime.MinValue;
+                                Action<AgentLogEntry> onAgentLog = (entry) =>
+                                {
+                                    lastLogLine = entry.Message.Truncate(200);
+                                    var now = DateTime.UtcNow;
+                                    if ((now - lastLogUpdate).TotalMilliseconds >= 1000)
+                                    {
+                                        lastLogUpdate = now;
+                                        string progressContent = mergedContentBuilder.ToString()
+                                            + statusMsg + $"\n> {lastLogLine}";
+                                        _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                                        {
+                                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                                            BatchStreamingUpdate(assistantMsgIndex, progressContent,
+                                                mergedReasoningBuilder.ToString(), isComplete: false);
+                                        });
+                                    }
+                                };
+                                targetAgent.LogEntryAdded += onAgentLog;
+
                                 // ── 执行当前 Handoff ──
                                 Logger.Info($"[MainFlow] 执行 Handoff → {currentHandoff.TargetAgent}");
                                 var handoffResult = await _activeAgent.ExecuteHandoffAsync(
                                     currentHandoff, handoffContext, _activePlan, _agentFactory);
+
+                                // ── 解绑日志事件 ──
+                                targetAgent.LogEntryAdded -= onAgentLog;
 
                                 // ── 构建当前 Handoff 结果内容 ──
                                 string handoffContent;
