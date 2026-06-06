@@ -741,6 +741,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     {
                         int originalIdx = dedupedIndices[i];
                         toolResults[originalIdx] = dedupedResults[i];
+
+                        // ── 活跃文件追踪：记录工具访问的文件 ──
+                        TryTrackActiveFileAccess(toolCalls[originalIdx], workspaceRoot);
                     }
                     // 将去重结果复制到所有重复调用
                     foreach (var mapping in dedupMapping)
@@ -2048,6 +2051,71 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
+        /// 尝试从工具调用中提取文件路径并注册到 ActiveFileTracker。
+        /// 解析工具参数 JSON 中的 filePath/path 字段，判断读写类型。
+        /// </summary>
+        private void TryTrackActiveFileAccess(ToolCall tc, string? workspaceRoot)
+        {
+            try
+            {
+                var tracker = BuiltInTools?.ActiveFileTracker;
+                if (tracker == null) return;
+
+                string toolName = tc.Function.Name;
+                string filePath = ExtractFilePathFromToolArgs(toolName, tc.Function.Arguments) ?? string.Empty;
+                if (string.IsNullOrEmpty(filePath)) return;
+
+                // 转换为绝对路径
+                string resolvedPath = ResolveToAbsolutePath(filePath, workspaceRoot);
+
+                int currentTurn = Context?.ContextManager?.TurnCount ?? 0;
+
+                if (IsWriteTool(toolName))
+                    tracker.ObserveWrite(resolvedPath, toolName, currentTurn);
+                else
+                    tracker.ObserveRead(resolvedPath, toolName, currentTurn);
+            }
+            catch
+            {
+                // 追踪失败不阻塞工具执行
+            }
+        }
+
+        /// <summary>
+        /// 将路径解析为绝对路径。
+        /// </summary>
+        private static string ResolveToAbsolutePath(string filePath, string? workspaceRoot)
+        {
+            if (Path.IsPathRooted(filePath))
+                return Path.GetFullPath(filePath);
+
+            if (!string.IsNullOrEmpty(workspaceRoot))
+            {
+                string candidate = Path.Combine(workspaceRoot, filePath.Replace('/', '\\'));
+                return Path.GetFullPath(candidate);
+            }
+
+            return filePath;
+        }
+
+        /// <summary>
+        /// 判断工具是否为写操作（编辑/创建/删除文件）。
+        /// </summary>
+        private static bool IsWriteTool(string toolName)
+        {
+            return toolName switch
+            {
+                "write_file" => true,
+                "create_file" => true,
+                "replace_in_file" => true,
+                "multi_replace_in_file" => true,
+                "delete_file" => true,
+                "apply_patch" => true,
+                _ => false,
+            };
+        }
+
+        /// <summary>
         /// 对同一批次中的工具调用进行去重。
         /// 相同函数名 + 相同参数（规范化 JSON）的调用只保留第一个，
         /// 后续重复调用映射到第一个的结果。
@@ -2113,15 +2181,24 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
-        /// 从工具参数 JSON 中提取目标文件路径。
+        /// 从工具参数 JSON 中提取目标文件路径（支持 filePath/path/file 字段）。
         /// </summary>
         private static string? ExtractFilePathFromToolArgs(string toolName, string argumentsJson)
         {
+            if (string.IsNullOrEmpty(argumentsJson)) return null;
+
             try
             {
-                using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
-                if (doc.RootElement.TryGetProperty("filePath", out var fpProp))
-                    return fpProp.GetString();
+                using var doc = JsonDocument.Parse(argumentsJson);
+                var root = doc.RootElement;
+
+                // 通用路径字段（优先级从高到低）
+                if (root.TryGetProperty("filePath", out var fp) && fp.ValueKind == JsonValueKind.String)
+                    return fp.GetString();
+                if (root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
+                    return p.GetString();
+                if (root.TryGetProperty("file", out var f) && f.ValueKind == JsonValueKind.String)
+                    return f.GetString();
             }
             catch { }
             return null;

@@ -94,6 +94,30 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// </summary>
         public string? CurrentSessionId { get; set; }
 
+        /// <summary>
+        /// 活跃文件追踪器（可选注入）。
+        /// 设置时会自动同步到 ReadFileTool 实例。
+        /// </summary>
+        private IActiveFileTracker? _activeFileTracker;
+        public IActiveFileTracker? ActiveFileTracker
+        {
+            get => _activeFileTracker;
+            set
+            {
+                _activeFileTracker = value;
+                SyncActiveFileTrackerToTools();
+            }
+        }
+
+        /// <summary>
+        /// 将 ActiveFileTracker 同步到需要它的工具实例。
+        /// </summary>
+        private void SyncActiveFileTrackerToTools()
+        {
+            if (_tools.TryGetValue("read_file", out var tool) && tool is ReadFileTool rft)
+                rft.ActiveFileTracker = _activeFileTracker;
+        }
+
         public BuiltInToolService(
             McpManagerService? mcpManager = null,
             WebSearchService? webSearchService = null,

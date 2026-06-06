@@ -56,6 +56,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// <summary>记忆上下文（独立存储，注入为 system 消息）</summary>
         private string? _memoryContext;
 
+        /// <summary>当前工作区根目录（用于 Working Set 摘要相对路径生成）</summary>
+        private string? _workspaceRoot;
+
         /// <summary>当前 Token 估算计数器（字符级原始估算，未校准）</summary>
         private int _estimatedTokens;
 
@@ -77,6 +80,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// 保障 DeepSeek V4 自动前缀缓存命中率。
         /// </summary>
         private PrefixCacheManager? _prefixCacheManager;
+
+        /// <summary>活跃文件追踪器（可选注入，用于 Working Set 摘要）</summary>
+        private IActiveFileTracker? _activeFileTracker;
+
+        /// <summary>工具结果裁剪器（可选注入）</summary>
+        private IToolResultCompactor? _toolResultCompactor;
+
+        /// <summary>当前使用的模型标识（用于裁剪器的大上下文模型检测）</summary>
+        public string CurrentModel { get; set; } = "deepseek-v4";
+
+        /// <summary>完整工具结果存储（按 tool_call_id 索引，保留原始结果备查）</summary>
+        private readonly Dictionary<string, string> _fullToolResultStore = new();
 
         /// <summary>Token 预算上限（默认 900K，DeepSeek V4 上下文窗口为 1M，留 100K 给输出）</summary>
         public int TokenBudget { get; set; } = 900_000;
@@ -160,6 +175,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         }
 
         /// <summary>
+        /// 设置当前工作区根目录（用于 Working Set 摘要的相对路径生成）。
+        /// </summary>
+        public void SetWorkspaceRoot(string? workspaceRoot)
+        {
+            _workspaceRoot = workspaceRoot;
+        }
+
+        /// <summary>
         /// 设置 RAG 检索上下文（注入为 system 消息）。
         /// 由 RagService 在每次用户消息前调用。
         /// </summary>
@@ -192,6 +215,33 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         public void SetPrefixCache(PrefixCacheManager? prefixCache)
         {
             _prefixCacheManager = prefixCache;
+        }
+
+        /// <summary>
+        /// 注入活跃文件追踪器。
+        /// 设置后，BuildDynamicContextBlock 将注入 Working Set 摘要。
+        /// </summary>
+        public void SetActiveFileTracker(IActiveFileTracker? tracker)
+        {
+            _activeFileTracker = tracker;
+        }
+
+        /// <summary>
+        /// 注入工具结果裁剪器。
+        /// 设置后，AddToolResult 将自动裁剪过长结果。
+        /// </summary>
+        public void SetToolResultCompactor(IToolResultCompactor? compactor)
+        {
+            _toolResultCompactor = compactor;
+        }
+
+        /// <summary>
+        /// 获取完整未裁剪的工具结果（按 tool_call_id）。
+        /// </summary>
+        public string? GetFullToolResult(string toolCallId)
+        {
+            _fullToolResultStore.TryGetValue(toolCallId, out string? result);
+            return result;
         }
 
         /// <summary>
@@ -288,13 +338,27 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
         /// <summary>
         /// 添加工具调用结果（tool 角色消息）。
+        /// 自动裁剪过长结果以保护上下文窗口。
+        /// 完整结果保留在独立存储中备查。
         /// </summary>
         public void AddToolResult(string toolCallId, string toolName, string result)
         {
+            // 保存原始完整结果
+            if (!string.IsNullOrEmpty(toolCallId) && !string.IsNullOrEmpty(result))
+                _fullToolResultStore[toolCallId] = result;
+
+            // 裁剪结果（若裁剪器已注入）
+            string contextResult = result;
+            if (_toolResultCompactor != null && !string.IsNullOrEmpty(result))
+            {
+                contextResult = _toolResultCompactor.CompactToolResultForContext(
+                    toolName, result, CurrentModel);
+            }
+
             _entries.Add(new ContextEntry
             {
                 Role = "tool",
-                Content = result,
+                Content = contextResult,
                 ToolCallId = toolCallId,
                 Name = toolName,
                 TurnIndex = TurnCount, // 工具调用属于当前轮次
@@ -448,6 +512,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 string compressedText = _compressor.GetCompressedContextText();
                 if (!string.IsNullOrWhiteSpace(compressedText))
                     parts.Add(compressedText);
+            }
+
+            // ── 活跃文件 Working Set（新增，放在压缩摘要之后）──
+            if (_activeFileTracker != null)
+            {
+                string activeFileSummary = _activeFileTracker.GetActiveFileSummary(
+                    _workspaceRoot ?? string.Empty);
+                if (!string.IsNullOrWhiteSpace(activeFileSummary))
+                    parts.Add(activeFileSummary);
             }
 
             // 搜索上下文
