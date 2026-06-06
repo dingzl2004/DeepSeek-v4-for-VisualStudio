@@ -226,7 +226,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
         /// <summary>
         /// 执行代码变更摘要生成（接收 Edit Agent 的 Handoff）。
-        /// 生成 AI 文字总结 + 文件变更统计表格 + 缓存命中率。
+        /// 
+        /// 优先级：
+        /// 1. 从会话记忆中读取 EditAgent 写入的步骤摘要文件（step-NN-summary.md、plan-final-summary.md）
+        /// 2. 回退到 plan.ChangedFiles 和 step.ResultSummary 直接构建摘要
+        /// 3. 最后可选：用一次无工具 AI 调用对聚合结果进行自然语言润色
+        /// 
+        /// 不再调用工具（read_file 等），直接基于已有数据合成摘要。
         /// </summary>
         private async Task<AgentResult> ExecuteSummaryAsync(string userMessage, AgentContext context)
         {
@@ -245,11 +251,23 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 result.Plan = plan;
                 result.FileChanges = plan.ChangedFiles;
 
-                // ── 生成 AI 文字总结（允许读取文件以提供更准确的摘要）──
-                string aiSummary = await GenerateChangeSummaryAsync(plan, context);
+                // ── 第1层：尝试从会话记忆读取步骤摘要 ──
+                string memorySummary = await ReadStepSummariesFromMemoryAsync(context);
+
+                // ── 第2层：直接从 plan 数据构建结构化摘要（无需工具调用）──
+                string directSummary = BuildDirectSummaryMarkdown(plan, memorySummary);
+
+                // ── 第3层（可选）：用一次无工具 AI 调用润色自然语言部分 ──
+                string aiSummary = string.Empty;
+                if (!string.IsNullOrWhiteSpace(memorySummary) && plan.ChangedFiles.Count > 0)
+                {
+                    aiSummary = await PolishSummaryWithAiAsync(directSummary, context);
+                }
 
                 // ── 构建最终 Markdown 总结 ──
-                result.Content = BuildSummaryMarkdown(plan, aiSummary);
+                result.Content = string.IsNullOrWhiteSpace(aiSummary)
+                    ? directSummary
+                    : BuildSummaryMarkdown(plan, aiSummary);
 
                 AddLog("INFO", string.Format(L["agent.log.askSummaryDone"], result.Content.Length));
                 result.Logs.AddRange(_logs);
@@ -268,6 +286,203 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 从会话记忆中读取 EditAgent 写入的步骤摘要文件。
+        /// 返回聚合后的 Markdown 文本，如果无记忆则返回空字符串。
+        /// </summary>
+        private async Task<string> ReadStepSummariesFromMemoryAsync(AgentContext context)
+        {
+            if (MemoryService == null) return string.Empty;
+
+            try
+            {
+                string sessionId = BuiltInTools?.CurrentSessionId;
+                var sb = new StringBuilder();
+
+                // 先尝试读取最终摘要
+                try
+                {
+                    var finalResult = await MemoryService.ViewAsync(
+                        MemoryScope.Session, "plan-final-summary.md",
+                        sessionId, context.SolutionPath);
+                    if (!string.IsNullOrWhiteSpace(finalResult.Content))
+                    {
+                        sb.AppendLine(finalResult.Content);
+                        return sb.ToString().TrimEnd();
+                    }
+                }
+                catch { /* 文件不存在，继续读取分步摘要 */ }
+
+                // 逐个读取步骤摘要
+                for (int i = 1; i <= 50; i++) // 安全上限 50 步
+                {
+                    string fileName = $"step-{i:D2}-summary.md";
+                    try
+                    {
+                        var stepResult = await MemoryService.ViewAsync(
+                            MemoryScope.Session, fileName,
+                            sessionId, context.SolutionPath);
+                        if (!string.IsNullOrWhiteSpace(stepResult.Content))
+                        {
+                            sb.AppendLine(stepResult.Content);
+                            sb.AppendLine();
+                        }
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        break; // 没有更多步骤文件
+                    }
+                }
+
+                return sb.ToString().TrimEnd();
+            }
+            catch (Exception ex)
+            {
+                AddLog("WARN", $"[Memory] 读取步骤摘要失败: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 直接从 plan 数据和记忆摘要构建结构化 Markdown 总结（无需 AI 工具调用）。
+        /// </summary>
+        private static string BuildDirectSummaryMarkdown(AgentTaskPlan plan, string memorySummary)
+        {
+            var L = LocalizationService.Instance;
+
+            if (plan.IsCancelled)
+                return L["edit.summary.cancelled"];
+
+            var sb = new StringBuilder();
+            sb.AppendLine(L["edit.summary.complete"]);
+            sb.AppendLine();
+            sb.AppendLine($"**{L["edit.summary.taskLabel"]}**: {plan.Title}");
+            sb.AppendLine($"**{L["edit.summary.fileCount"]}**: {plan.ChangedFiles.Count}");
+
+            // ── 步骤执行情况 ──
+            int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
+            int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
+            int skipped = plan.Steps.Count(s => s.Status == AgentStepStatus.Skipped);
+            sb.AppendLine($"**步骤**: {completed}/{plan.Steps.Count} 完成"
+                + (failed > 0 ? $"，{failed} 失败" : "")
+                + (skipped > 0 ? $"，{skipped} 跳过" : ""));
+            sb.AppendLine();
+
+            // ── 如果有记忆中的步骤摘要，优先展示 ──
+            if (!string.IsNullOrWhiteSpace(memorySummary))
+            {
+                sb.AppendLine($"### {L["edit.summary.changeSummary"]}");
+                sb.AppendLine();
+                sb.AppendLine(memorySummary);
+                sb.AppendLine();
+            }
+            else
+            {
+                // ── 回退：从 plan 数据直接生成步骤摘要 ──
+                sb.AppendLine($"### {L["edit.summary.changeSummary"]}");
+                sb.AppendLine();
+                foreach (var step in plan.Steps)
+                {
+                    string icon = step.Status switch
+                    {
+                        AgentStepStatus.Completed => "✅",
+                        AgentStepStatus.Failed => "❌",
+                        AgentStepStatus.Skipped => "⏭",
+                        _ => "⬜",
+                    };
+                    string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
+                        ? step.ResultSummary
+                        : "(无)";
+                    sb.AppendLine($"- {icon} **{step.Title}**: {summary}");
+                }
+                sb.AppendLine();
+            }
+
+            // ── 文件变更统计 ──
+            if (plan.ChangedFiles.Count > 0)
+            {
+                var mergedFiles = plan.ChangedFiles
+                    .GroupBy(c => NormalizePath(c.FilePath), StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new
+                    {
+                        DisplayPath = g.First().FilePath,
+                        FileName = Path.GetFileName(g.First().FilePath),
+                        LinesAdded = g.Sum(c => c.LinesAdded),
+                        LinesRemoved = g.Sum(c => c.LinesRemoved),
+                        Description = g.Select(c => c.BriefDescription)
+                            .FirstOrDefault(d => !string.IsNullOrEmpty(d)
+                                && !d!.Contains("(Patch)")
+                                && !d!.Contains("(InsertEdit)")
+                                && !d!.Contains("(CreateFile)")),
+                    })
+                    .ToList();
+
+                sb.AppendLine(LocalizationService.Instance["agent.panel.fileChangeStats"]);
+                sb.AppendLine();
+                sb.AppendLine("| 文件 | 变更 | 说明 |");
+                sb.AppendLine("|------|------|------|");
+                foreach (var change in mergedFiles)
+                {
+                    string delta = $"{(change.LinesAdded > 0 ? $"+{change.LinesAdded}" : "")}"
+                        + $"{(change.LinesRemoved > 0 ? $" -{change.LinesRemoved}" : "")}";
+                    string desc = change.Description ?? (change.LinesAdded > 0 && change.LinesRemoved == 0 ? "新增"
+                        : change.LinesRemoved > 0 && change.LinesAdded == 0 ? "删除" : "修改");
+                    if (desc.Length > 40) desc = desc.Substring(0, 37) + "...";
+                    sb.AppendLine($"| `{change.FileName}` | {delta} | {desc} |");
+                }
+                sb.AppendLine();
+                sb.AppendLine(LocalizationService.Instance.Format("edit.summary.totalChanges",
+                    mergedFiles.Sum(c => c.LinesAdded),
+                    mergedFiles.Sum(c => c.LinesRemoved)));
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 用一次无工具 AI 调用对直接摘要进行自然语言润色。
+        /// 仅在记忆摘要非空且存在文件变更时调用。
+        /// </summary>
+        private async Task<string> PolishSummaryWithAiAsync(string directSummary, AgentContext context)
+        {
+            try
+            {
+                var ct = context.CancellationToken;
+                var L = LocalizationService.Instance;
+
+                var messages = new List<ChatApiMessage>
+                {
+                    new ChatApiMessage
+                    {
+                        Role = "system",
+                        Content = "你是一个代码变更总结助手。请将下方结构化摘要润色为流畅的自然语言段落（3-5句话），保持客观描述，不评价代码质量。只输出润色后的文本，不添加任何额外说明。"
+                    },
+                    new ChatApiMessage
+                    {
+                        Role = "user",
+                        Content = $"请润色以下代码变更摘要为自然语言：\n\n{directSummary}"
+                    }
+                };
+
+                // 使用无工具调用的简单 API 调用
+                string result = await CallAiWithToolLoopAsync(
+                    messages,
+                    GetWorkspaceRoot(context),
+                    ct,
+                    maxTokens: 1024,
+                    maxToolRounds: 0,  // 不允许工具调用
+                    toolWhitelist: new List<string>()); // 空白名单 = 不允许任何工具
+
+                result = StripToolCallMarkers(result);
+                return result?.Trim() ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                AddLog("WARN", $"[AskAgent] AI 润色失败，使用直接摘要: {ex.Message}");
+                return string.Empty;
+            }
         }
 
         /// <summary>

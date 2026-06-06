@@ -51,7 +51,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _memoryService = new MemoryService();
             _builtInToolService = new BuiltInToolService(_mcpManager, _webSearchService, buildService, _memoryService);
 
-            _agentFactory = new AgentFactory(_apiService, _builtInToolService, _mcpManager);
+            _agentFactory = new AgentFactory(_apiService, _builtInToolService, _mcpManager, _memoryService);
             // 默认活跃 Agent 为 AskAgent
             _activeAgent = _agentFactory.AskAgent;
             _activeAgent.PermissionRequested += OnAgentPermissionRequested;

@@ -70,6 +70,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// <summary>MCP 管理器引用（由 AgentDispatcher 注入，用于执行 MCP 工具）</summary>
         public McpManagerService? McpManager { get; set; }
 
+        /// <summary>记忆服务引用（由 AgentFactory 注入，用于程序化读写持久化记忆）</summary>
+        public IMemoryService? MemoryService { get; set; }
+
         /// <summary>ExploreAgent 引用（由 AgentDispatcher 注入，用于 runSubagent 委派探索任务）</summary>
         public ExploreAgent? ExploreAgent { get; set; }
 

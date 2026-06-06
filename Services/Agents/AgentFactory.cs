@@ -20,6 +20,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         private readonly DeepSeekApiService _apiService;
         private BuiltInToolService? _builtInToolService;
         private McpManagerService? _mcpManager;
+        private readonly IMemoryService? _memoryService;
 
         // ── Agent 实例（懒加载） ──
         private AskAgent? _askAgent;
@@ -102,11 +103,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
         public AgentFactory(DeepSeekApiService apiService,
             BuiltInToolService? builtInToolService = null,
-            McpManagerService? mcpManager = null)
+            McpManagerService? mcpManager = null,
+            IMemoryService? memoryService = null)
         {
             _apiService = apiService ?? throw new ArgumentNullException(nameof(apiService));
             _builtInToolService = builtInToolService;
             _mcpManager = mcpManager;
+            _memoryService = memoryService;
         }
 
         /// <summary>
@@ -172,6 +175,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 agent.BuiltInTools = _builtInToolService;
             if (agent.McpManager == null && _mcpManager != null)
                 agent.McpManager = _mcpManager;
+            if (agent.MemoryService == null && _memoryService != null)
+                agent.MemoryService = _memoryService;
         }
 
         /// <summary>

@@ -343,11 +343,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                         // ── 更新代码记忆：从文件读取缓存中提取关键文件内容 ──
                         UpdateCodeMemory(context, plan);
+
+                        // ── 将步骤摘要写入会话记忆（供 Ask Agent 最终汇总使用）──
+                        await SaveStepSummaryToMemoryAsync(step, plan, context);
                     }
                 }
 
                 plan.IsCompleted = plan.Steps.All(s =>
                     s.Status is AgentStepStatus.Completed or AgentStepStatus.Skipped);
+
+                // ── 计划完成后，将聚合摘要写入会话记忆 ──
+                if (plan.IsCompleted && !plan.IsCancelled)
+                {
+                    await SaveFinalPlanSummaryToMemoryAsync(plan, context);
+                }
 
                 // ── 诊断日志：记录步骤完成情况 ──
                 int completedCount = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
@@ -2780,6 +2789,180 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 return EditOperationType.CreateFile;
 
             return EditOperationType.CreateFile; // 默认
+        }
+
+        #endregion
+
+        #region Memory — 步骤摘要写入会话记忆
+
+        /// <summary>
+        /// 将单个步骤的完成摘要写入会话记忆，供 Ask Agent 最终汇总使用。
+        /// </summary>
+        private async Task SaveStepSummaryToMemoryAsync(AgentStep step, AgentTaskPlan plan, AgentContext context)
+        {
+            if (MemoryService == null) return;
+
+            try
+            {
+                string sessionId = BuiltInTools?.CurrentSessionId;
+                string stepSummary = BuildStepSummaryMarkdown(step, plan);
+                string fileName = $"step-{step.Index:D2}-summary.md";
+
+                // 先检查文件是否已存在（防止重复写入）
+                try
+                {
+                    await MemoryService.ViewAsync(MemoryScope.Session, fileName, sessionId, context.SolutionPath);
+                    // 文件已存在，使用 str_replace 更新
+                    await MemoryService.StrReplaceAsync(MemoryScope.Session, fileName,
+                        "（步骤执行中...）", stepSummary, sessionId, context.SolutionPath);
+                }
+                catch (FileNotFoundException)
+                {
+                    // 文件不存在，创建新文件
+                    await MemoryService.CreateAsync(MemoryScope.Session, fileName,
+                        stepSummary, sessionId, context.SolutionPath);
+                }
+
+                AddLog("INFO", $"[Memory] 步骤 {step.Index} 摘要已写入会话记忆: {fileName}");
+            }
+            catch (Exception ex)
+            {
+                AddLog("WARN", $"[Memory] 步骤摘要写入失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 计划全部完成后，将聚合摘要写入会话记忆。
+        /// </summary>
+        private async Task SaveFinalPlanSummaryToMemoryAsync(AgentTaskPlan plan, AgentContext context)
+        {
+            if (MemoryService == null) return;
+
+            try
+            {
+                string sessionId = BuiltInTools?.CurrentSessionId;
+                string finalSummary = BuildFinalPlanSummaryMarkdown(plan);
+                string fileName = "plan-final-summary.md";
+
+                await MemoryService.CreateAsync(MemoryScope.Session, fileName,
+                    finalSummary, sessionId, context.SolutionPath);
+
+                AddLog("INFO", $"[Memory] 最终计划摘要已写入会话记忆: {fileName}");
+            }
+            catch (Exception ex)
+            {
+                // 文件可能已存在，尝试更新
+                try
+                {
+                    string sessionId = BuiltInTools?.CurrentSessionId;
+                    await MemoryService.StrReplaceAsync(MemoryScope.Session, "plan-final-summary.md",
+                        "（计划执行中...）", BuildFinalPlanSummaryMarkdown(plan),
+                        sessionId, context.SolutionPath);
+                }
+                catch
+                {
+                    AddLog("WARN", $"[Memory] 最终计划摘要写入失败: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 构建单个步骤的 Markdown 摘要。
+        /// </summary>
+        private static string BuildStepSummaryMarkdown(AgentStep step, AgentTaskPlan plan)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"# 步骤 {step.Index}/{plan.Steps.Count}: {step.Title}");
+            sb.AppendLine();
+            sb.AppendLine($"- **状态**: {(step.Status == AgentStepStatus.Completed ? "✅ 完成" : "❌ 失败")}");
+            sb.AppendLine($"- **任务**: {plan.Title}");
+            if (!string.IsNullOrWhiteSpace(step.ResultSummary))
+            {
+                sb.AppendLine($"- **结果**: {step.ResultSummary}");
+            }
+            if (!string.IsNullOrWhiteSpace(step.Description))
+            {
+                sb.AppendLine($"- **描述**: {step.Description}");
+            }
+            // 展示当前所有已变更文件
+            var allFiles = plan.ChangedFiles
+                .GroupBy(c => c.FilePath, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new { Name = System.IO.Path.GetFileName(g.Key), Added = g.Sum(c => c.LinesAdded), Removed = g.Sum(c => c.LinesRemoved) })
+                .ToList();
+            if (allFiles.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## 已修改的文件");
+                foreach (var file in allFiles)
+                {
+                    string delta = $"{(file.Added > 0 ? $"+{file.Added}" : "")}"
+                        + $"{(file.Removed > 0 ? $" -{file.Removed}" : "")}";
+                    sb.AppendLine($"- `{file.Name}` {delta}");
+                }
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 构建最终计划聚合摘要。
+        /// </summary>
+        private static string BuildFinalPlanSummaryMarkdown(AgentTaskPlan plan)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"# 计划完成: {plan.Title}");
+            sb.AppendLine();
+            int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);
+            int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
+            int skipped = plan.Steps.Count(s => s.Status == AgentStepStatus.Skipped);
+            sb.AppendLine($"- **总步骤**: {plan.Steps.Count}");
+            sb.AppendLine($"- **完成**: {completed} | **失败**: {failed} | **跳过**: {skipped}");
+            sb.AppendLine();
+
+            // 汇总所有步骤
+            sb.AppendLine("## 步骤摘要");
+            sb.AppendLine();
+            foreach (var step in plan.Steps)
+            {
+                string icon = step.Status switch
+                {
+                    AgentStepStatus.Completed => "✅",
+                    AgentStepStatus.Failed => "❌",
+                    AgentStepStatus.Skipped => "⏭",
+                    _ => "⬜",
+                };
+                string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
+                    ? step.ResultSummary
+                    : "(无详细结果)";
+                sb.AppendLine($"- {icon} **{step.Title}**: {summary}");
+            }
+
+            // 汇总所有文件变更
+            var mergedFiles = plan.ChangedFiles
+                .GroupBy(c => c.FilePath, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new
+                {
+                    Path = System.IO.Path.GetFileName(g.Key),
+                    Added = g.Sum(c => c.LinesAdded),
+                    Removed = g.Sum(c => c.LinesRemoved),
+                })
+                .ToList();
+
+            if (mergedFiles.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## 文件变更汇总");
+                sb.AppendLine();
+                sb.AppendLine("| 文件 | 变更 |");
+                sb.AppendLine("|------|------|");
+                foreach (var f in mergedFiles)
+                {
+                    string delta = $"{(f.Added > 0 ? $"+{f.Added}" : "")}"
+                        + $"{(f.Removed > 0 ? $" -{f.Removed}" : "")}";
+                    sb.AppendLine($"| `{f.Path}` | {delta} |");
+                }
+            }
+
+            return sb.ToString().TrimEnd();
         }
 
         #endregion
