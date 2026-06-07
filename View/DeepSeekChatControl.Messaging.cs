@@ -1341,6 +1341,48 @@ namespace DeepSeek_v4_for_VisualStudio.View
                                 _contextManager.AddAssistantMessage(handoffContent);
                                 Logger.Info($"[MainFlow] Handoff 链 #{handoffChainRounds} 完成: → {currentHandoff.TargetAgent}, 内容长度={handoffContent.Length}");
 
+                                // ── 如果 Handoff 结果包含计划（PlanAgent 产出），创建面板并持久化 PlanJson ──
+                                if (handoffResult.Plan != null && handoffResult.Plan.Steps.Count > 0)
+                                {
+                                    var plan = handoffResult.Plan;
+                                    _activePlan = plan;
+                                    Logger.Info($"[MainFlow] Handoff 链收到计划: {plan.Steps.Count} 个步骤, IsFromPlanAgent={plan.IsFromPlanAgent}");
+
+                                    bool anyStepExecuted = plan.Steps.Any(s => s.Status != AgentStepStatus.Pending);
+                                    if (!anyStepExecuted && plan.IsFromPlanAgent)
+                                    {
+                                        try
+                                        {
+                                            string createJs = ChatHtmlService.BuildAgentTaskPanelCreateJs(plan);
+                                            await ChatWebView.CoreWebView2.ExecuteScriptAsync(createJs);
+                                            lock (_lock) { _createdPlanIds.Add(plan.PlanId); }
+                                            Logger.Info($"[MainFlow] 任务面板已创建: PlanId={plan.PlanId}, Steps={plan.Steps.Count}");
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Logger.Error($"[MainFlow] 任务面板创建失败: {ex.Message}", ex);
+                                        }
+                                    }
+
+                                    // ── 持久化 PlanJson 到当前 assistant 消息 ──
+                                    lock (_lock)
+                                    {
+                                        if (assistantMsgIndex >= 0 && assistantMsgIndex < _messages.Count)
+                                        {
+                                            try
+                                            {
+                                                _messages[assistantMsgIndex].PlanJson = JsonSerializer.Serialize(
+                                                    plan, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                                                Logger.Info($"[MainFlow] PlanJson 已持久化到消息 idx={assistantMsgIndex}");
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                Logger.Error($"[MainFlow] PlanJson 持久化失败: {ex.Message}", ex);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // ── 每步完成后更新 UI：移除"正在执行"提示，展示已累积的结果 ──
                                 assistantMsg.Content = mergedContentBuilder.ToString();
                                 assistantMsg.ReasoningContent = mergedReasoningBuilder.ToString();

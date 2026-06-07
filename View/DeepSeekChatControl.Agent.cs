@@ -511,9 +511,18 @@ namespace DeepSeek_v4_for_VisualStudio.View
                                 string createJs = ChatHtmlService.BuildAgentTaskPanelCreateJs(plan);
                                 await ChatWebView.CoreWebView2.ExecuteScriptAsync(createJs);
                                 lock (_lock) { _createdPlanIds.Add(plan.PlanId); }
+                                Logger.Info($"[Agent] 任务面板已创建: PlanId={plan.PlanId}, Steps={plan.Steps.Count}");
+                            }
+                            else
+                            {
+                                // 既非 PlanAgent 产出也无已执行步骤 → 不创建面板，但记录日志
+                                Logger.Info($"[Agent] 跳过面板创建: IsFromPlanAgent={plan.IsFromPlanAgent}, anyStepExecuted={anyStepExecuted}, Steps={plan.Steps.Count}");
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            Logger.Error($"[Agent] 任务面板创建失败: {ex.Message}", ex);
+                        }
                     }
 
                     // ── 构建最终摘要并更新思考气泡为完成状态 ──

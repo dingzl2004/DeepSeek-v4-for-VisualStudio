@@ -226,6 +226,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 if (restoredPlan != null)
                 {
                     _activePlan = restoredPlan;
+                    Logger.Info($"[AgentHandoff] 从 PlanJson 恢复了计划: {restoredPlan.Steps.Count} 个步骤 (PlanId={restoredPlan.PlanId}, IsFromPlanAgent={restoredPlan.IsFromPlanAgent})");
 
                     // 重建 PlanFilePath（用于 ExecuteHandoffAsync 加载 plan.md）
                     // 与 PlanAgent.SavePlanMarkdownAsync 保持相同的路径计算逻辑
@@ -248,7 +249,11 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     }
                     context.PlanFilePath = Path.Combine(subDir, "plan.md");
 
-                    Logger.Info($"[AgentHandoff] 从 PlanJson 恢复了计划: {restoredPlan.Steps.Count} 个步骤");
+                    Logger.Info($"[AgentHandoff] 从 PlanJson 恢复了计划: {restoredPlan.Steps.Count} 个步骤 (PlanId={restoredPlan.PlanId}, IsFromPlanAgent={restoredPlan.IsFromPlanAgent})");
+                }
+                else
+                {
+                    Logger.Warn("[AgentHandoff] 未找到有效的 PlanJson，EditAgent 将回退到单步执行");
                 }
 
                 // ── 切换到目标 Agent 并绑定事件 ──

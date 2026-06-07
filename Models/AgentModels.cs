@@ -232,7 +232,11 @@ namespace DeepSeek_v4_for_VisualStudio.Models
 
     /// <summary>
     /// 问题选项。
+    /// 支持两种 JSON 格式：
+    /// - 对象: {"label": "选项A", "description": "说明"}
+    /// - 字符串: "选项A"（AI 可能简化为纯字符串）
     /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(QuestionOptionConverter))]
     public class QuestionOption
     {
         /// <summary>选项标签</summary>
@@ -240,6 +244,56 @@ namespace DeepSeek_v4_for_VisualStudio.Models
 
         /// <summary>选项描述（可选）</summary>
         public string? Description { get; set; }
+    }
+
+    /// <summary>
+    /// QuestionOption 的自定义 JSON 转换器，兼容 AI 输出的两种格式。
+    /// </summary>
+    public class QuestionOptionConverter : System.Text.Json.Serialization.JsonConverter<QuestionOption>
+    {
+        public override QuestionOption? Read(ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
+        {
+            if (reader.TokenType == System.Text.Json.JsonTokenType.String)
+            {
+                // AI 输出纯字符串: "选项A" → QuestionOption { Label = "选项A" }
+                return new QuestionOption { Label = reader.GetString() ?? string.Empty };
+            }
+
+            if (reader.TokenType == System.Text.Json.JsonTokenType.StartObject)
+            {
+                // 标准对象格式: {"label": "选项A", "description": "说明"}
+                var option = new QuestionOption();
+                while (reader.Read())
+                {
+                    if (reader.TokenType == System.Text.Json.JsonTokenType.EndObject)
+                        return option;
+
+                    if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName)
+                    {
+                        string propName = reader.GetString() ?? string.Empty;
+                        reader.Read();
+                        if (string.Equals(propName, "label", StringComparison.OrdinalIgnoreCase))
+                            option.Label = reader.GetString() ?? string.Empty;
+                        else if (string.Equals(propName, "description", StringComparison.OrdinalIgnoreCase))
+                            option.Description = reader.GetString();
+                        else
+                            reader.Skip();
+                    }
+                }
+                return option;
+            }
+
+            throw new System.Text.Json.JsonException($"QuestionOption 期望 String 或 Object，实际为 {reader.TokenType}");
+        }
+
+        public override void Write(System.Text.Json.Utf8JsonWriter writer, QuestionOption value, System.Text.Json.JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("label", value.Label);
+            if (!string.IsNullOrEmpty(value.Description))
+                writer.WriteString("description", value.Description);
+            writer.WriteEndObject();
+        }
     }
 
     /// <summary>
