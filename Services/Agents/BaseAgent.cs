@@ -250,30 +250,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// <summary>
         /// 当前待确认的权限请求字典（RequestId → AgentPermissionRequest）。
         /// 支持多个并发权限请求（工具调用并行执行时每个工具可能独立请求权限）。
-        /// 已弃用：单个 PendingPermission 属性在多工具并行场景存在竞态条件，
-        /// 请使用 TryGetPendingPermission(requestId) 或 TryRemovePendingPermission(requestId)。
+        /// 请使用 TryGetPendingPermission(requestId) 或 TryRemovePendingPermission(requestId) 按 RequestId 精确查找。
         /// </summary>
         private readonly ConcurrentDictionary<string, AgentPermissionRequest> _pendingPermissions = new();
 
         /// <summary>
-        /// [已弃用] 单个待确认权限请求。多工具并行场景下不可靠，仅保留用于向后兼容。
-        /// 建议使用 TryGetPendingPermission(requestId) 按 RequestId 精确查找。
-        /// </summary>
-        [Obsolete("多工具并行场景存在竞态条件，使用 TryGetPendingPermission(requestId) 代替")]
-        public AgentPermissionRequest? PendingPermission { get; protected set; }
-
-        /// <summary>
         /// 当前待回答的提问请求字典（RequestId → AgentQuestionRequest）。
-        /// 支持多个并发提问请求（与权限请求同样的竞态条件修复）。
+        /// 支持多个并发提问请求。
+        /// 请使用 TryGetPendingQuestion(requestId) 按 RequestId 精确查找。
         /// </summary>
         private readonly ConcurrentDictionary<string, AgentQuestionRequest> _pendingQuestions = new();
-
-        /// <summary>
-        /// [已弃用] 单个待回答的提问请求。并发场景下不可靠，仅保留用于向后兼容。
-        /// 建议使用 TryGetPendingQuestion(requestId) 按 RequestId 精确查找。
-        /// </summary>
-        [Obsolete("并发场景存在竞态条件，使用 TryGetPendingQuestion(requestId) 代替")]
-        public AgentQuestionRequest? PendingQuestion { get; protected set; }
 
         /// <summary>AI 通过 request_handoff 工具发起的待处理移交请求</summary>
         public HandoffRequest? PendingHandoffRequest { get; protected set; }
@@ -541,7 +527,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// <param name="workspaceRoot">工作区根目录，用于内置工具（如 file_search, list_dir）</param>
         /// <param name="ct">取消令牌</param>
         /// <param name="maxTokens">最大 token 数</param>
-        /// <param name="maxToolRounds">【已废弃】使用智能循环检测替代。保留参数兼容性，但不再使用。</param>
         /// <param name="toolWhitelist">自定义工具白名单（null = 使用 Definition.AllowedTools）</param>
         /// <param name="onThinking">思考内容回调（用于 UI 实时更新）</param>
         /// <param name="onContent">内容回调（用于 UI 实时更新）</param>
@@ -552,7 +537,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             string? workspaceRoot,
             CancellationToken ct,
             int maxTokens = 4096,
-            int maxToolRounds = 30,
             List<string>? toolWhitelist = null,
             Action<string>? onThinking = null,
             Action<string>? onContent = null,
@@ -2909,16 +2893,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             // 将请求注册到并发字典（支持多工具并行场景）
             _pendingPermissions[request.RequestId] = request;
-            // 向后兼容：同时设置单字段（供旧代码通过 PendingPermission 属性访问）
-            PendingPermission = request;
             PermissionRequested?.Invoke(request);
             AddLog("INFO", string.Format(LocalizationService.Instance["agent.log.waitingPermission"], title));
 
             bool approved = await request.ResponseTcs.Task;
             // 清理：如果该请求仍在字典中则移除（可能已被 RespondToPermission 移除）
             _pendingPermissions.TryRemove(request.RequestId, out _);
-            if (PendingPermission?.RequestId == request.RequestId)
-                PendingPermission = null;
             AddLog("INFO", $"{LocalizationService.Instance["agent.log.permissionResult"]}: {(approved ? "✅ 允许" : "❌ 拒绝")} → {title}");
             return approved;
         }
@@ -2947,16 +2927,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             // 将请求注册到并发字典（支持多工具并行场景）
             _pendingPermissions[request.RequestId] = request;
-            // 向后兼容：同时设置单字段
-            PendingPermission = request;
             PermissionRequested?.Invoke(request);
             AddLog("INFO", string.Format(LocalizationService.Instance["agent.log.waitingTerminalApproval"], command));
 
             bool approved = await request.ResponseTcs.Task;
             // 清理
             _pendingPermissions.TryRemove(request.RequestId, out _);
-            if (PendingPermission?.RequestId == request.RequestId)
-                PendingPermission = null;
             AddLog("INFO", string.Format(LocalizationService.Instance["agent.log.terminalApprovalResult"],
                 approved ? "✅ 允许" : "⏭️ 跳过", command));
             return approved;
@@ -2986,18 +2962,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// </summary>
         public void RespondToPermission(string requestId, bool approved)
         {
-            // 优先从并发安全字典中查找（支持多工具并行场景）
+            // 从并发安全字典中查找（支持多工具并行场景）
             if (_pendingPermissions.TryRemove(requestId, out var request))
             {
                 request.ResponseTcs?.TrySetResult(approved);
-                return;
-            }
-
-            // 向后兼容：回退到旧的单字段 PendingPermission
-            if (PendingPermission?.RequestId == requestId)
-            {
-                PendingPermission.ResponseTcs?.TrySetResult(approved);
-                PendingPermission = null;
             }
         }
 
@@ -3025,8 +2993,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                 // 将请求注册到并发字典（支持多工具并行场景）
                 _pendingQuestions[request.RequestId] = request;
-                // 向后兼容
-                PendingQuestion = request;
 
                 // ── 诊断：记录事件订阅状态 ──
                 int handlerCount = QuestionsRequested?.GetInvocationList().Length ?? 0;
@@ -3039,7 +3005,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         $"无法向用户展示 {questions.Count} 个问题。请检查 Agent 事件绑定链。" +
                         $"当前活跃 Agent: {Definition.Type}, RequestId={request.RequestId}");
                     _pendingQuestions.TryRemove(request.RequestId, out _);
-                    PendingQuestion = null;
                     return "[]"; // 返回空答案，让 AI 知道用户未回答
                 }
 
@@ -3052,8 +3017,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                 // 清理
                 _pendingQuestions.TryRemove(request.RequestId, out _);
-                if (PendingQuestion?.RequestId == request.RequestId)
-                    PendingQuestion = null;
                 AddLog("INFO", string.Format(LocalizationService.Instance["agent.log.answersReceived"],
                     answers.Truncate(200)));
                 return answers;
@@ -3079,18 +3042,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// </summary>
         public void RespondToQuestions(string requestId, string answersJson)
         {
-            // 优先从并发安全字典中查找（支持多工具并行场景）
+            // 从并发安全字典中查找（支持多工具并行场景）
             if (_pendingQuestions.TryRemove(requestId, out var request))
             {
                 request.ResponseTcs?.TrySetResult(answersJson);
-                return;
-            }
-
-            // 向后兼容：回退到旧的单字段 PendingQuestion
-            if (PendingQuestion?.RequestId == requestId)
-            {
-                PendingQuestion.ResponseTcs?.TrySetResult(answersJson);
-                PendingQuestion = null;
             }
         }
 
@@ -3125,16 +3080,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             // 将请求注册到并发字典（支持多工具并行场景）
             _pendingPermissions[request.RequestId] = request;
-            // 向后兼容
-            PendingPermission = request;
             PermissionRequested?.Invoke(request);
             AddLog("INFO", $"{LocalizationService.Instance["agent.log.waitingDeleteConfirm"]}: {title}");
 
             bool approved = await request.ResponseTcs.Task;
             // 清理
             _pendingPermissions.TryRemove(request.RequestId, out _);
-            if (PendingPermission?.RequestId == request.RequestId)
-                PendingPermission = null;
             AddLog("INFO", LocalizationService.Instance.Format("agent.log.fileDeleteConfirm", approved ? "✅ 确认删除" : "❌ 取消", title));
             return approved;
         }

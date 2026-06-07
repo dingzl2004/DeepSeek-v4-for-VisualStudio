@@ -189,27 +189,6 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// [已废弃] 通过 JS 增量更新流式消息的 DOM 内容（旧版 ExecuteScriptAsync 路径）。
-        /// 当前所有流式更新已迁移至 PostWebMessageAsString 非阻塞通道，
-        /// 此方法保留仅用于回退调试，计划在下个版本移除。
-        /// </summary>
-        [Obsolete("已迁移至 PostStreamingUpdate (PostWebMessageAsString 非阻塞通道)")]
-        private async Task UpdateStreamingMessageAsync(int messageIndex, string content, string reasoningContent, bool isComplete)
-        {
-            if (ChatWebView.CoreWebView2 == null) return;
-
-            try
-            {
-                string js = ChatHtmlService.BuildStreamingUpdateJs(messageIndex, content, reasoningContent, isComplete);
-                await ChatWebView.CoreWebView2.ExecuteScriptAsync(js);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"[Render] UpdateStreamingMessage 异常: {ex.Message}", ex);
-            }
-        }
-
-        /// <summary>
         /// 通过 PostWebMessageAsString 非阻塞推送流式更新（高性能路径）。
         /// PostWebMessageAsString 不等待 JS 执行完成，不阻塞 UI 线程。
         /// JS 侧通过 requestAnimationFrame 批量处理 DOM 更新。

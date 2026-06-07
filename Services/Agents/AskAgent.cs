@@ -485,7 +485,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     GetWorkspaceRoot(context),
                     ct,
                     maxTokens: 1024,
-                    maxToolRounds: 0,  // 不允许工具调用
                     toolWhitelist: new List<string>()); // 空白名单 = 不允许任何工具
 
                 result = StripToolCallMarkers(result);
@@ -664,7 +663,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     workspaceRoot,
                     ct,
                     maxTokens: 4096,
-                    maxToolRounds: 3,
                     toolWhitelist: new List<string>(AskTools));
 
                 // ── 安全剥离：防止 AI 意外输出工具调用标记或思考过程 ──

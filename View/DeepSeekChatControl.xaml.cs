@@ -28,8 +28,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
     /// DeepSeek Chat 主控件，对标共享项目 ucChat。
     /// 宿主 WebView2（Chromium），采用增量渲染模式：
     /// - 首次加载使用 NavigateToString 构建完整页面
-    /// - 后续消息通过 ExecuteScriptAsync 调用 JS 增量追加
-    /// - 流式输出时通过 BuildStreamingUpdateJs 实时更新 DOM，消除全页刷新闪烁
+    /// - 后续消息通过 PostWebMessageAsString 非阻塞推送增量更新
+    /// - 流式输出时通过 BuildStreamUpdateJson 实时更新 DOM，消除全页刷新闪烁
     /// </summary>
     public partial class DeepSeekChatControl : System.Windows.Controls.UserControl, IDisposable
     {
