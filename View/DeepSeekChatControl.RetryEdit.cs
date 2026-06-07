@@ -368,8 +368,20 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     {
                         try
                         {
-                            string completeJs = ChatHtmlService.BuildAgentTaskPanelCompleteJs(plan);
-                            await ChatWebView.CoreWebView2.ExecuteScriptAsync(completeJs);
+                            bool anyStepExecuted = plan.Steps.Any(s => s.Status != AgentStepStatus.Pending);
+                            if (anyStepExecuted)
+                            {
+                                // 步骤已执行 → 更新面板为完成/进度状态
+                                string completeJs = ChatHtmlService.BuildAgentTaskPanelCompleteJs(plan);
+                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(completeJs);
+                            }
+                            else if (plan.IsFromPlanAgent)
+                            {
+                                // 新创建的计划（PlanAgent 产出）→ 创建任务面板
+                                string createJs = ChatHtmlService.BuildAgentTaskPanelCreateJs(plan);
+                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(createJs);
+                                lock (_lock) { _createdPlanIds.Add(plan.PlanId); }
+                            }
                         }
                         catch { }
                     }
@@ -487,6 +499,24 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 catch { }
                 lock (_lock) { _isGenerating = false; }
                 UpdateButtonsState();
+            }
+
+            // ── 在 finally 清理完毕后，如有新 Handoff 则注入按钮 ──
+            //    注意：finally 块会先移除旧的 handoff 按钮，新按钮在清理完后注入
+            if (_pendingHandoff != null && _agentStreamingMsgIndex >= 0)
+            {
+                try
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (ChatWebView.CoreWebView2 != null)
+                    {
+                        string targetAgentStr = _pendingHandoff.TargetAgent.ToString();
+                        string handoffBtnJs = ChatHtmlService.BuildHandoffButtonJs(
+                            _agentStreamingMsgIndex, targetAgentStr, _pendingHandoff.Label);
+                        await ChatWebView.CoreWebView2.ExecuteScriptAsync(handoffBtnJs);
+                    }
+                }
+                catch { }
             }
         }
 

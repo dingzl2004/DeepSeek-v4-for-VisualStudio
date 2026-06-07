@@ -463,14 +463,25 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 {
                     var plan = agentResult.Plan;
 
-                    // ── 更新任务面板为完成状态（仅当步骤已实际执行过）──
+                    // ── 创建或更新任务面板 ──
                     bool anyStepExecuted = plan.Steps.Any(s => s.Status != AgentStepStatus.Pending);
-                    if (plan.Steps.Count > 0 && anyStepExecuted)
+                    if (plan.Steps.Count > 0)
                     {
                         try
                         {
-                            string completeJs = ChatHtmlService.BuildAgentTaskPanelCompleteJs(plan);
-                            await ChatWebView.CoreWebView2.ExecuteScriptAsync(completeJs);
+                            if (anyStepExecuted)
+                            {
+                                // 步骤已执行 → 更新面板为完成/进度状态
+                                string completeJs = ChatHtmlService.BuildAgentTaskPanelCompleteJs(plan);
+                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(completeJs);
+                            }
+                            else if (plan.IsFromPlanAgent)
+                            {
+                                // 新创建的计划（PlanAgent 产出，所有步骤待执行）→ 创建任务面板
+                                string createJs = ChatHtmlService.BuildAgentTaskPanelCreateJs(plan);
+                                await ChatWebView.CoreWebView2.ExecuteScriptAsync(createJs);
+                                lock (_lock) { _createdPlanIds.Add(plan.PlanId); }
+                            }
                         }
                         catch { }
                     }
