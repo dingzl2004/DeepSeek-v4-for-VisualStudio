@@ -251,8 +251,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     // ── 上下文感知意图覆盖：当存在待处理计划时的特殊路由 ──
                     routing = OverrideRoutingForPlanContext(userText, routing);
 
+                    // ── @agent 显式路由时始终走 Agent 工作流，确保 IsExplicitRoute 保护生效 ──
                     bool needsAgent = routing.TargetAgent != AgentType.Ask
-                        || routing.NeedsPlanning;
+                        || routing.NeedsPlanning
+                        || routing.IsExplicit;
 
                     if (needsAgent)
                     {
@@ -405,6 +407,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
                 _isGenerating = true;
                 UpdateButtonsState();
+
+                // ── 清理上次遗留的 Handoff 状态，防止按钮残留 ──
+                _pendingHandoff = null;
 
                 bool isWebSearchEnabled = _webSearchEngine != "Off";
                 StatusLabel.Text = isWebSearchEnabled ? LocalizationService.Instance["status.webSearching"] : LocalizationService.Instance["status.thinking"];
@@ -1917,15 +1922,29 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 // ── 防御：记录当前活跃 Agent 类型，确保移交链路可追溯 ──
                 var activeType = _activeAgent?.Definition.Type;
                 Logger.Info($"[MainFlow] 当前活跃 Agent: {activeType}, Handoff 来源: {request.SourceAgent} → 目标: {request.TargetAgent}");
+
+                // ── 显式路由拦截：@agent 时 AI 不应自主移交（Plan→Edit 除外）──
+                bool isExplicitRoute = _activeAgent?.Context?.IsExplicitRoute == true;
+                if (isExplicitRoute
+                    && !(activeType == AgentType.Plan && request.TargetAgent == AgentType.Edit))
+                {
+                    request.Rejected = true;
+                    request.RejectReason = $"用户通过 @{activeType?.ToString().ToLowerInvariant()} 显式指定了当前 Agent，请直接处理任务，不要移交控制权。";
+                    Logger.Info($"[MainFlow] 🚫 显式路由拦截移交 → {request.TargetAgent}");
+                    await Task.CompletedTask;
+                    return;
+                }
+
                 // 构建 AgentHandoff 并设置 _pendingHandoff，主流程将在本轮工具调用后执行移交
+                var L = LocalizationService.Instance;
                 string label = request.TargetAgent switch
                 {
-                    AgentType.Edit => "执行修改",
-                    AgentType.Ask => "生成总结",
-                    AgentType.Plan => "制定计划",
-                    AgentType.Build => "诊断修复",
-                    AgentType.Explore => "探索代码库",
-                    _ => "移交任务"
+                    AgentType.Edit => L["agent.ask.handoffEditLabel"],
+                    AgentType.Ask => L["agent.edit.handoffAskLabel"],
+                    AgentType.Plan => L["agent.ask.handoffPlanLabel"],
+                    AgentType.Build => L["agent.ask.handoffBuildLabel"],
+                    AgentType.Explore => L["agent.ask.handoffExploreLabel"],
+                    _ => L["agent.handoff.defaultLabel"]
                 };
                 _pendingHandoff = new AgentHandoff
                 {
