@@ -1108,7 +1108,11 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 return;
             }
 
-            InitializeApiService();
+            // 仅在 ApiService 未初始化时创建，避免重置累计 Token 计数器
+            if (_apiService == null)
+            {
+                InitializeApiService();
+            }
             if (_apiService == null)
             {
                 lock (_lock) { _isGenerating = false; }
