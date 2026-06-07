@@ -1,4 +1,5 @@
 ﻿using DeepSeek_v4_for_VisualStudio.Services;
+using DeepSeek_v4_for_VisualStudio.Utils;
 using Microsoft.VisualStudio.Shell;
 using System;
 using System.ComponentModel;
@@ -33,6 +34,22 @@ namespace DeepSeek_v4_for_VisualStudio.Settings
             if (e.ApplyBehavior == ApplyKind.Apply)
             {
                 SettingsChanged?.Invoke();
+            }
+        }
+
+        /// <summary>
+        /// 安全加载设置存储。捕获因 VS 版本兼容性（如 IVsProfileLazyImportControl
+        /// 在部分 VS 版本不可用）导致的 InvalidCastException，回退到默认值。
+        /// </summary>
+        public override void LoadSettingsFromStorage()
+        {
+            try
+            {
+                base.LoadSettingsFromStorage();
+            }
+            catch (InvalidCastException ex)
+            {
+                Logger.Warn($"[Settings] LoadSettingsFromStorage 失败（VS 版本兼容性）: {ex.Message}");
             }
         }
         [LocalizedCategory("settings.category.api")]

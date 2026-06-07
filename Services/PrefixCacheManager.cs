@@ -131,8 +131,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             _pinnedSystemPromptFingerprint = systemPromptFingerprint;
             _pinnedToolCatalogFingerprint = toolCatalogFingerprint;
             _pinnedCombinedFingerprint = combinedFingerprint;
-            _totalChecks = 0;
-            _stableChecks = 0;
 
             Logger.Info($"[PrefixCache] Pinned 基准指纹: system={TruncateFingerprint(systemPromptFingerprint)}, " +
                         $"tool={TruncateFingerprint(toolCatalogFingerprint)}, " +
@@ -204,8 +202,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
             if (spChanged)
             {
-                // system prompt 变化 → 完全 re-pin，发出 Warning
+                // system prompt 变化 → 完全 re-pin，发出 Warning，开始新的稳定性统计周期
                 Pin(currentSystemPromptFingerprint, currentToolCatalogFingerprint, currentCombinedFingerprint);
+                _totalChecks = 1;
+                _stableChecks = 1;
 
                 string cause = toolChanged ? "system prompt 和 tool 集均变化" : "system prompt 变化";
                 Logger.Warn($"[PrefixCache] ⚠️ 前缀漂移检测: {cause} | " +

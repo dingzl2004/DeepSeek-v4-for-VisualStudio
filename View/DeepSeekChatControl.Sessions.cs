@@ -559,6 +559,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
         {
             try
             {
+                // ── 重置累计 Token / 费用计数器 ──
+                _apiService?.ResetAccumulatedStats();
+
                 // ── 重置树 ──
                 _tree = new ConversationTree();
                 Logger.Info("[Tree] 清空会话 → ConversationTree 已重置");
