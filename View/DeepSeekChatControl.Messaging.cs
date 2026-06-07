@@ -1451,6 +1451,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         PostStreamEnd(assistantMsgIndex, finalContent, finalReasoning, finalCacheFooterHtml);
                     }
 
+                    // ── Handoff 链完成，清理 ActivePlan 防止下次调用复用已完成计划（与 RunAgentWorkflowAsync finally 对齐）──
+                    _activePlan = null;
+
                     // ── AI 自动生成会话标题（首轮对话完成后触发） ──
                     if (_pendingAiTitle && !string.IsNullOrWhiteSpace(_firstUserMessageForTitle))
                     {
