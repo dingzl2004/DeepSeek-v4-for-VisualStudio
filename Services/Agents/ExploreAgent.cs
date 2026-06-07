@@ -210,6 +210,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// </summary>
         public override async Task<AgentResult> ExecuteAsync(string userMessage, AgentContext context)
         {
+            // ── 清理上次执行的移交状态 ──
+            PendingHandoffRequest = null;
+
             // 日志只显示用户消息的第一行（实际任务描述），
             // 后续行是 PlanAgent 注入的结构上下文等元数据，无需在日志中展示
             string logMessage = userMessage;

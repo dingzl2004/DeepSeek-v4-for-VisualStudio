@@ -148,26 +148,30 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 _ => AskAgent,
             };
 
-            // ── 注入 ExploreAgent 引用 ──
+            // ── 注入 ExploreAgent 引用并设置日志转发（统一单点，避免双重订阅）──
+            // AskAgent / BuildAgent：简单属性 + WireExploreLogs
             WireExploreAgent(agent);
 
-            // ── EditAgent 特殊处理：PlanUpdated 事件 ──
+            // EditAgent / PlanAgent：属性 setter 内部调用 RegisterExploreAgent（已含日志转发）
+            // 注意：RegisterExploreAgent 自带 -= 防重，但 InjectServices 已移除此逻辑，
+            // 确保此处是唯一注入点。
             if (agent is EditAgent editAgent && editAgent.ExploreAgent == null)
                 editAgent.ExploreAgent = ExploreAgent;
-
-            // ── PlanAgent 必须使用共享 ExploreAgent ──
             if (agent is PlanAgent planAgent)
                 planAgent.ExploreAgent = ExploreAgent;
 
-            // ── 确保基类 ExploreAgent 属性已注入 ──
+            // ── 通用回退：确保 BaseAgent.ExploreAgent 已注入并设置日志转发 ──
             if (agent.ExploreAgent == null)
+            {
                 agent.ExploreAgent = ExploreAgent;
+                agent.WireExploreLogs();
+            }
 
             return agent;
         }
 
         /// <summary>
-        /// 注入共享服务到 Agent。
+        /// 注入共享服务到 Agent（不包含 ExploreAgent，由 GetAgent 统一管理）。
         /// </summary>
         private void InjectServices(BaseAgent agent)
         {
@@ -177,20 +181,23 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 agent.McpManager = _mcpManager;
             if (agent.MemoryService == null && _memoryService != null)
                 agent.MemoryService = _memoryService;
-            // ── 注入 ExploreAgent 引用（修复：AskAgent 等通过属性访问器获取时缺失 ExploreAgent 注入）──
-            if (agent.ExploreAgent == null)
-                agent.ExploreAgent = ExploreAgent;
         }
 
         /// <summary>
-        /// 确保 Agent 有 ExploreAgent 引用。
+        /// 确保 Agent 有 ExploreAgent 引用并设置日志转发。
         /// </summary>
         private void WireExploreAgent(BaseAgent agent)
         {
             if (agent is AskAgent askAgent && askAgent.ExploreAgent == null)
+            {
                 askAgent.ExploreAgent = ExploreAgent;
+                askAgent.WireExploreLogs();
+            }
             if (agent is BuildAgent buildAgent && buildAgent.ExploreAgent == null)
+            {
                 buildAgent.ExploreAgent = ExploreAgent;
+                buildAgent.WireExploreLogs();
+            }
         }
 
         public void Dispose()

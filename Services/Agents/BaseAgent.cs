@@ -2109,7 +2109,22 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         {
             // 转发 ExploreAgent 日志到父 Agent，触发 LogEntryAdded 以便 UI 实时刷新进度
             // 由于 RegisterExploreAgent 只订阅一次（构造函数中），不会出现并行重复订阅问题
-            AddLog(entry.Level, $"[Explore] {entry.Message}");
+            // 注意：直接转发原始消息（不加前缀），确保 FormatLogForThinking 的 emoji 匹配正常工作
+            RaiseLogEntryAdded(entry);
+        }
+
+        /// <summary>
+        /// 确保 ExploreAgent 的日志转发到当前 Agent。
+        /// 供 AgentFactory 在注入 ExploreAgent 引用后调用（AgentFactory 无法访问 protected RegisterExploreAgent）。
+        /// </summary>
+        public void WireExploreLogs()
+        {
+            if (ExploreAgent != null)
+            {
+                // 先移除防止重复订阅，再重新订阅
+                ExploreAgent.LogEntryAdded -= OnExploreLog;
+                ExploreAgent.LogEntryAdded += OnExploreLog;
+            }
         }
 
         private void OnExploreFileChange(AgentFileChangeEventArgs args)
