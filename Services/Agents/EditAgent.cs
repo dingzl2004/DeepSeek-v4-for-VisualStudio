@@ -140,7 +140,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
         private static string BuildSystemPrompt()
         {
-            return LocalizationService.Instance["system.agent.editPromptFragment"];
+            return LocalizationService.Instance["system.agent.editPromptFragment"]
+                + "\n\n## 🔌 MCP 外部工具\n"
+                + "你可能拥有从 MCP 服务器导入的外部工具（如部署、数据库操作、CI/CD 触发等）。\n"
+                + "这些写类工具可直接在代码修改流程中使用，帮助你完成更复杂的端到端任务。";
         }
 
         #endregion

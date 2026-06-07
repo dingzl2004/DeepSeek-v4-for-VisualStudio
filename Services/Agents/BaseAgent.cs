@@ -25,6 +25,156 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         protected readonly DeepSeekApiService _apiService;
         protected readonly List<AgentLogEntry> _logs = new();
 
+        // ════════════════════════════════════════════════════════════════
+        // MCP 工具自动分类：根据工具名前缀/关键词判断读写属性，
+        // 使 MCP 导入的外部工具能自动匹配到合适的 Agent。
+        // ════════════════════════════════════════════════════════════════
+
+        /// <summary>已知内置工具名（MCP 同名工具会覆盖内置，不同名工具按分类注入）</summary>
+        protected static readonly HashSet<string> KnownBuiltInToolNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "list_dir", "read_file", "file_search", "grep_search", "get_errors",
+            "fetch_webpage", "build_solution", "replace_string_in_file", "multi_replace_string_in_file",
+            "create_file", "delete_file", "apply_patch", "create_directory", "run_in_terminal",
+            "get_terminal_output", "VisualStudio_askQuestions", "runSubagent", "request_handoff",
+            "git", "memory", "search", "get_changed_files", "github_repo", "manage_todo_list",
+            "create_and_run_task", "edit_notebook_file"
+        };
+
+        /// <summary>读类 MCP 工具名前缀/关键词（分配给 ExploreAgent）</summary>
+        private static readonly string[] ReadMcpPatterns =
+        {
+            "get_", "list_", "read_", "search_", "find_", "query_", "fetch_", "describe_",
+            "browse_", "view_", "show_", "check_", "lookup_", "scan_", "export_", "download_",
+            "pull_", "status_", "log_", "diff_", "print_", "display_"
+        };
+
+        /// <summary>单词语义读类工具名（不含下划线的完整匹配）</summary>
+        private static readonly HashSet<string> ReadSingleWordNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ocr", "recognize", "parse", "analyze", "validate", "resolve",
+            "inspect", "identify", "detect", "ping", "whoami"
+        };
+
+        /// <summary>写类 MCP 工具名前缀/关键词（分配给 EditAgent / BuildAgent）</summary>
+        private static readonly string[] WriteMcpPatterns =
+        {
+            "create_", "delete_", "update_", "write_", "run_", "execute_", "build_", "deploy_",
+            "push_", "commit_", "apply_", "set_", "add_", "remove_", "edit_", "modify_",
+            "install_", "publish_", "start_", "stop_", "restart_", "config_", "patch_",
+            "merge_", "upload_", "save_", "insert_", "replace_"
+        };
+
+        /// <summary>
+        /// 对 MCP 工具进行分类并返回应自动注入到指定 Agent 白名单的工具名。
+        /// 仅返回不与内置工具重名的 MCP 工具。
+        /// </summary>
+        /// <param name="mcpManager">MCP 管理器（null 时返回空列表）</param>
+        /// <param name="agentType">目标 Agent 类型</param>
+        /// <returns>应自动注入的 MCP 工具名列表</returns>
+        protected static List<string> GetAutoMcpToolNames(McpManagerService? mcpManager, AgentType agentType)
+        {
+            var result = new List<string>();
+            if (mcpManager == null || mcpManager.AllTools.Count == 0)
+                return result;
+
+            bool wantRead = agentType == AgentType.Explore;
+            bool wantWrite = agentType == AgentType.Edit || agentType == AgentType.Build;
+
+            if (!wantRead && !wantWrite)
+                return result; // Ask / Plan 不自动注入 MCP 工具
+
+            foreach (var tool in mcpManager.AllTools)
+            {
+                // 跳过与内置工具同名的（已由 BuiltInToolService 统一管理，MCP 同名会覆盖内置）
+                if (KnownBuiltInToolNames.Contains(tool.Name))
+                    continue;
+
+                bool isRead = IsReadMcpTool(tool);
+                bool isWrite = IsWriteMcpTool(tool);
+
+                if (wantRead && isRead)
+                    result.Add(tool.Name);
+                else if (wantWrite && isWrite)
+                    result.Add(tool.Name);
+                else if (wantRead && !isWrite)
+                    // 只读 Agent：无法判断时默认归为只读（安全）
+                    result.Add(tool.Name);
+                // 写 Agent 仅在明确匹配写模式时才加入，无法判断时不加入（安全优先）
+                // 如果 isRead && isWrite 同时为 true → 两个 Agent 都加上
+            }
+
+            return result;
+        }
+
+        private static bool IsReadMcpTool(McpTool tool)
+        {
+            // 前缀匹配
+            foreach (var pattern in ReadMcpPatterns)
+            {
+                if (tool.Name.StartsWith(pattern, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            // 单词语义匹配（不含下划线的完整工具名）
+            if (ReadSingleWordNames.Contains(tool.Name))
+                return true;
+            // 描述关键词辅助判断
+            if (!string.IsNullOrEmpty(tool.Description))
+            {
+                var desc = tool.Description;
+                if (desc.Contains("read", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("get", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("list", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("query", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("search", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("fetch", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("view", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("retrieve", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("recognize", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("ocr", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("scan", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("parse", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("extract", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("analyze", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("detect", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("identify", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("inspect", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("validate", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("resolve", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("lookup", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsWriteMcpTool(McpTool tool)
+        {
+            foreach (var pattern in WriteMcpPatterns)
+            {
+                if (tool.Name.StartsWith(pattern, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            // 描述关键词辅助判断
+            if (!string.IsNullOrEmpty(tool.Description))
+            {
+                var desc = tool.Description;
+                if (desc.Contains("create", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("delete", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("update", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("write", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("run", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("execute", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("modify", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("change", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("install", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("deploy", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("publish", StringComparison.OrdinalIgnoreCase) ||
+                    desc.Contains("push", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// 所有 Agent 共享的 System Prompt 前缀（不含语言指令，由 GetCommonSystemPromptPrefix 动态注入）。
         /// 放在 messages[0]，确保跨 Agent 切换时 DeepSeek Prefix Cache 仍能命中。
@@ -460,6 +610,17 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             "run_in_terminal", "write_file", "edit_file"
                         };
                         effectiveWhitelist = effectiveWhitelist.Where(t => !modifyingTools.Contains(t)).ToList();
+                    }
+
+                    // ── 自动注入未重叠的 MCP 工具（按 Agent 类型分类）──
+                    if (McpManager != null && McpManager.AllTools.Count > 0 && effectiveWhitelist != null)
+                    {
+                        var autoMcpNames = GetAutoMcpToolNames(McpManager, Definition.Type);
+                        if (autoMcpNames.Count > 0)
+                        {
+                            effectiveWhitelist = new List<string>(effectiveWhitelist);
+                            effectiveWhitelist.AddRange(autoMcpNames);
+                        }
                     }
 
                     // 内置工具（含通过 BuiltInToolService 统一管理的 MCP 工具）

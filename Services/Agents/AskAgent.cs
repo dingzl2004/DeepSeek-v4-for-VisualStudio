@@ -98,7 +98,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 + "- Explore 子代理会返回基于实际文件内容的分析结果\n"
                 + "- 你基于 Explore 的返回结果回答问题，附上引用来源\n"
                 + "- 需要探索代码库时**必须**先调用 runSubagent，不要凭训练数据猜测\n"
-                + "- **Git 查询**（查看状态、日志、差异等）也通过 Explore 子代理进行，Explore 具有 git 只读工具\n\n"
+                + "- **Git 查询**（查看状态、日志、差异等）也通过 Explore 子代理进行，Explore 具有 git 只读工具\n"
+                + "- **MCP 外部工具**（如数据库查询、API 检索等）同样通过 Explore 子代理访问——你无法直接调用 MCP 只读工具，使用 runSubagent 委派即可\n\n"
                 + "## 记忆系统 (memory 工具)\n"
                 + "你拥有一个持久化记忆系统，通过 `memory` 工具管理三层记忆：\n"
                 + "- **用户记忆** (`/memories/`): 跨所有工作区持久化，用于存储用户偏好、编码习惯、常用命令等\n"
@@ -117,7 +118,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 + "- **用户明确要求'修复报错'/'fix errors'/'解决编译问题'** → 直接移交给 `Build` Agent，不要用 Explore 探索\n"
                 + "- **Git 写操作（commit/push/分支切换/stash 等）** → 移交给 `Edit` Agent\n"
                 + "- **执行终端命令（dotnet build/npm install 等）** → 移交给 `Edit` Agent\n"
-                + "- **探索代码库 / Git 只读查询（status/diff/log）** → 不要移交！使用 `runSubagent` 委派给 Explore 子代理即可\n"
+                + "- **需要 MCP 写工具（如部署、数据库写入等）** → 移交给 `Edit` 或 `Build` Agent\n"
+                + "- **探索代码库 / Git 只读查询（status/diff/log）/ MCP 只读工具** → 不要移交！使用 `runSubagent` 委派给 Explore 子代理即可\n"
                 + "- 你**不需要**提前判断用户意图，在对话中自然地发现问题后移交即可\n"
                 + "- 简单问答/概念解释/技术讨论 → 你直接回答，不要移交";
         }
