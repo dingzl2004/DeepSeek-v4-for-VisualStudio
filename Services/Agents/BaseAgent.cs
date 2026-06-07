@@ -1322,6 +1322,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         // ── 并行子代理限流：获取信号量，限制同时运行的 Explore 子代理数量 ──
                         await SubagentConcurrencyLimiter.WaitAsync(ct);
 
+                        // ── 获取信号量后再次检查取消（防止在排队等待期间用户点了停止）──
+                        ct.ThrowIfCancellationRequested();
+
                         // ── 不再通过 LogEntryAdded 事件转发 Explore 日志（并行 runSubagent 会导致重复订阅）
                         //    改为在 Explore 完成后从 exploreResult.Logs 批量导入。 ──
                         AgentResult? exploreResult = null;
@@ -1378,6 +1381,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         return exploreResult.Success
                             ? "(ExploreAgent 完成但无内容)"
                             : $"❌ ExploreAgent 失败: {exploreResult.ErrorMessage ?? "未知错误"}";
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Logger.Info($"[BaseAgent] runSubagent 被取消 (ExploreAgent: {ctx.Description.Truncate(80)})");
+                        throw; // 让取消信号向上传播，停止整个 Agent 流程
                     }
                     catch (Exception ex)
                     {
