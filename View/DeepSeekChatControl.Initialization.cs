@@ -829,6 +829,13 @@ namespace DeepSeek_v4_for_VisualStudio.View
             {
                 Logger.Info("[Render] WebView2 已初始化，直接刷新页面内容");
                 RebuildMessagesHtml();
+                // ── 重置页面就绪标志，防止 RebuildPanelsWhenPageReadyAsync 使用旧页面状态 ──
+                // 若 _browserInitialized 为 false（如 OnSolutionClosed 后），UpdateBrowser 会做全量刷新
+                // 此时必须重置 _pageReady，确保面板重建等待新页面加载完成
+                if (!_browserInitialized)
+                {
+                    _pageReady = false;
+                }
                 UpdateBrowser();
                 // ── 重建持久化的任务面板 ──
                 _ = RebuildPanelsWhenPageReadyAsync();
@@ -849,6 +856,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     // 全量替换路径（而非增量追加），避免与事件处理器中的空白页面重复。
                     RebuildMessagesHtml();
                     _browserInitialized = false;
+                    _pageReady = false;  // 重置页面就绪标志，等待新页面加载完成
                     UpdateBrowser();
                     // ── 重建持久化的任务面板 ──
                     _ = RebuildPanelsWhenPageReadyAsync();
