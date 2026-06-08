@@ -1372,8 +1372,22 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         private async Task<string> ExecuteToolAsync(string toolName, string argumentsJson, string? workspaceRoot, CancellationToken ct)
         {
             // ── 注入 ExploreHandler 到 BuiltInToolService（桥接 Agent.ExploreAgent）──
-            if (BuiltInTools != null && ExploreAgent != null)
+            // 🔑 修复：确保即使 BaseAgent.ExploreAgent 为 null 也能找到 ExploreAgent。
+            // 场景：AskAgent 的 ExploreAgent 可能由 AgentFactory 通过不同类型引用设置。
+            var effectiveExploreAgent = ExploreAgent
+                ?? (this as AskAgent)?.ExploreAgent
+                ?? (this as EditAgent)?.ExploreAgent
+                ?? (this as PlanAgent)?.ExploreAgent
+                ?? (this as BuildAgent)?.ExploreAgent;
+
+            if (BuiltInTools != null && effectiveExploreAgent != null)
             {
+                if (ExploreAgent == null)
+                {
+                    // 回退：将派生类的 ExploreAgent 同步到基类属性
+                    ExploreAgent = effectiveExploreAgent;
+                    Logger.Info($"[Agent:{Definition.Name}] 从派生类回退同步 ExploreAgent 到基类");
+                }
                 BuiltInTools.ExploreHandler = async (ctx) =>
                 {
                     try

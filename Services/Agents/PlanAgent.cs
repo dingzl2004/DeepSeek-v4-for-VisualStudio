@@ -37,7 +37,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         public new ExploreAgent? ExploreAgent
         {
             get => _exploreAgent;
-            set => RegisterExploreAgent(value, ref _exploreAgent);
+            set
+            {
+                RegisterExploreAgent(value, ref _exploreAgent);
+                base.ExploreAgent = value; // 🔑 同步到基类属性，确保 ExecuteToolAsync 可见
+            }
         }
 
         public PlanAgent(DeepSeekApiService apiService) : base(apiService, AgentType.Plan)
