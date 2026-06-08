@@ -150,6 +150,88 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             _reasoningEffort = effort;
         }
 
+        /// <summary>API 请求序号（用于转储文件命名）</summary>
+        private static int _requestSequence;
+
+        /// <summary>
+        /// 将完整 API 请求体 + 缓存命中统计写入磁盘，供离线分析。
+        /// 文件路径: %TEMP%\DeepSeekCacheDumps\req_{序号}_{时间戳}.json
+        /// </summary>
+        private static void DumpRequestToDisk(string requestJson, int requestBytes,
+            int hitTokens, int missTokens, int cacheableTokens, double hitRate,
+            int messageCount, int toolCount)
+        {
+            try
+            {
+                int seq = Interlocked.Increment(ref _requestSequence);
+                string dir = Path.Combine(Path.GetTempPath(), "DeepSeekCacheDumps");
+                Directory.CreateDirectory(dir);
+
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                string fileName = $"req_{seq:D4}_{timestamp}.json";
+                string filePath = Path.Combine(dir, fileName);
+
+                // 解析 messages 做摘要（避免文件过大）
+                List<object> msgSummaries;
+                try
+                {
+                    using var doc = JsonDocument.Parse(requestJson);
+                    var msgs = doc.RootElement.GetProperty("messages");
+                    msgSummaries = new List<object>();
+                    foreach (var m in msgs.EnumerateArray())
+                    {
+                        string role = m.GetProperty("role").GetString() ?? "?";
+                        string? content = null;
+                        if (m.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                            content = c.GetString();
+                        bool hasToolCalls = m.TryGetProperty("tool_calls", out _);
+
+                        msgSummaries.Add(new
+                        {
+                            role,
+                            content_length = content?.Length ?? 0,
+                            content_preview = content?.Substring(0, Math.Min(content?.Length ?? 0, 200)),
+                            has_tool_calls = hasToolCalls
+                        });
+                    }
+                }
+                catch { msgSummaries = new List<object>(); }
+
+                var dump = new
+                {
+                    sequence = seq,
+                    timestamp = DateTime.Now.ToString("O"),
+                    request = new
+                    {
+                        size_bytes = requestBytes,
+                        size_kb = requestBytes / 1024.0,
+                        message_count = messageCount,
+                        tool_count = toolCount,
+                        messages_summary = msgSummaries,
+                        full_request_json = requestJson
+                    },
+                    cache = new
+                    {
+                        hit_tokens = hitTokens,
+                        miss_tokens = missTokens,
+                        cacheable_tokens = cacheableTokens,
+                        hit_rate = hitRate,
+                        hit_rate_pct = $"{hitRate * 100:F1}%"
+                    }
+                };
+
+                var opts = new JsonSerializerOptions { WriteIndented = true };
+                string dumpJson = JsonSerializer.Serialize(dump, opts);
+                File.WriteAllText(filePath, dumpJson, Encoding.UTF8);
+
+                Logger.Info($"[Dump] 请求已写入磁盘: {fileName} ({requestBytes / 1024}KB)");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Dump] 写入磁盘失败: {ex.Message}");
+            }
+        }
+
         public async IAsyncEnumerable<string> ChatStreamAsync(
             IEnumerable<ChatApiMessage> messages,
             List<ToolDefinition>? tools = null,
@@ -274,6 +356,34 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
             // ── 记录请求元数据 ──
             Logger.Info($"[API] 发送请求: {requestBodyBytes.Length / 1024}KB, 消息数={request.Messages.Count}, 工具数={tools?.Count ?? 0}, maxTokens={maxTokens}");
+
+            // ── messages 前缀分段诊断（DeepSeek 缓存仅匹配 messages 字段）──
+            int msg0Length = 0;
+            try
+            {
+                if (request.Messages.Count > 0)
+                {
+                    // 单独序列化 messages[0] 估算其 token 占比
+                    var msg0Json = JsonSerializer.Serialize(request.Messages[0], new JsonSerializerOptions
+                    {
+                        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+                    });
+                    msg0Length = Encoding.UTF8.GetByteCount(msg0Json);
+
+                    // 序列化全部 messages 估算总长度
+                    var allMsgJson = JsonSerializer.Serialize(request.Messages, new JsonSerializerOptions
+                    {
+                        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+                    });
+                    int allMsgLength = Encoding.UTF8.GetByteCount(allMsgJson);
+
+                    Logger.Info($"[Cache] 前缀分段: messages[0]≈{msg0Length / 1024.0:F1}KB | " +
+                        $"全部messages≈{allMsgLength / 1024.0:F1}KB | " +
+                        $"总请求体={requestBodyBytes.Length / 1024.0:F1}KB | " +
+                        $"工具数={tools?.Count ?? 0}(不参与缓存)");
+                }
+            }
+            catch { }
 
             // ── 消息结构分解日志（诊断缓存命中率用）──
             try
@@ -484,7 +594,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             if (contentBatch.Length > 0)
                 yield return contentBatch.ToString();
 
-            // ── 流结束后记录本次 API 调用的 Cache 命中率（即时诊断）──
+            // ── 流结束后记录本次 API 调用的 Cache 命中率 + 前缀边界诊断 ──
             try
             {
                 if (LastUsage != null)
@@ -496,7 +606,25 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     {
                         double rate = (double)hit / cacheableTotal;
                         string level = rate >= 0.95 ? "🟢" : rate >= 0.70 ? "🟡" : rate >= 0.30 ? "🟠" : "🔴";
-                        Logger.Info($"[Cache] {level} API调用完成: 命中率={rate * 100:F1}% (命中 {hit:N0} / 未命中 {miss:N0} / 可缓存 {cacheableTotal:N0} / prompt {LastUsage.PromptTokens:N0} tokens)");
+
+                        // ── 边界诊断：仅 messages 参与缓存，判断 messages[0] 是否命中 ──
+                        const int bytesPerToken = 3;
+                        int msg0TokenEstimate = msg0Length / bytesPerToken;
+                        string missBoundary;
+                        if (msg0Length > 0 && hit >= msg0TokenEstimate * 0.8)
+                            missBoundary = $"✅ messages[0] 命中 → miss 在对话历史/动态块之后";
+                        else if (msg0Length > 0)
+                            missBoundary = $"🔴 messages[0] 未完全命中！命中={hit} tokens, messages[0]≈{msg0TokenEstimate} tokens → SharedImmutablePrefix 可能已变化";
+                        else
+                            missBoundary = "（无分段数据）";
+
+                        Logger.Info($"[Cache] {level} API调用完成: 命中率={rate * 100:F1}% (命中 {hit:N0} / 未命中 {miss:N0} / 可缓存 {cacheableTotal:N0} / prompt {LastUsage.PromptTokens:N0} tokens)\n" +
+                            $"        ↳ 边界: {missBoundary}");
+
+                        // ── 磁盘转储：写入完整请求体 + 缓存统计，供离线分析 ──
+                        DumpRequestToDisk(requestJson, requestBodyBytes.Length,
+                            hit, miss, cacheableTotal, rate,
+                            request.Messages.Count, tools?.Count ?? 0);
                     }
                     else
                     {
