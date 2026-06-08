@@ -646,6 +646,16 @@
 
                     <!-- 左侧: 模型、思考和搜索设置 -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Button x:Name="ThemeToggleButton"
+                                Click="ThemeToggleButton_Click"
+                                Style="{StaticResource TransparentButton}"
+                                ToolTip="切换主题 (自动/深色/浅色)"
+                                FontSize="14" Padding="4,0" Margin="0,0,2,0"
+                                Foreground="#CEA85C">
+                            <Button.Content>
+                                <TextBlock x:Name="ThemeToggleIcon" Text="🌓" FontSize="14" />
+                            </Button.Content>
+                        </Button>
                         <Button x:Name="UploadButton" Content="📎"
                             Click="UploadButton_Click"
                             Style="{StaticResource TransparentButton}"

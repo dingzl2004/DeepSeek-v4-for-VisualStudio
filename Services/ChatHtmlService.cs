@@ -928,17 +928,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         private static string WrapFullPage(string messagesHtml, bool hasStreamingMessage)
         {
             string autoScrollJs = hasStreamingMessage ? BuildAutoScrollJs() : "";
+            bool isLight = ThemeService.Instance.IsLight;
 
 return "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'>" +
        "<meta name='viewport' content='width=device-width,initial-scale=1'>" +
        "<style>" + PageCss + "</style>" +
-       // CSS 也改为非阻塞加载
-       "<link rel='stylesheet' href='" + HighlightJsCdnStyleDark + 
+       "<link rel='stylesheet' href='" + HighlightJsCdnStyle + 
        "' media='none' onload=\"if(this.media!=='all')this.media='all'\" />" +
        "</head><body>" +
        "<div id='chat-container'>" + messagesHtml + "</div>" +
        "<script>" +
-       // 动态创建 script 标签，异步加载 highlight.js
        "var hljsScript=document.createElement('script');" +
        "hljsScript.src='" + HighlightJsCdnScript + "';" +
        "hljsScript.onload=function(){" +

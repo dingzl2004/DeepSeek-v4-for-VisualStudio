@@ -263,6 +263,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
         private int _lastReportedStepIndex;
         private string _lastReportedStepStatus = string.Empty;
 
+        // ── 主题服务 ──
+        private ThemeService _themeService = ThemeService.Instance;
+        private bool _isApplyingTheme; // 防止递归
+
         #endregion
 
         #region Constructors
@@ -314,6 +318,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             // ── 状态信息直接显示在输入区顶部状态行 ──
             StatusLabel.Text = "正在初始化…";
+
+            // ── 订阅主题变更事件 ──
+            _themeService.ThemeChanged += OnThemeChanged;
 
             // ── 程序化创建 WebView2 控件 ──
             // 不在 XAML 中声明 wv2:WebView2，以避免 ReSharper 等第三方扩展
@@ -729,6 +736,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
             _disposed = true;
 
             DeepSeekOptionsPage.SettingsChanged -= OnOcrSettingsChanged;
+
+            // ── 取消主题事件订阅 ──
+            _themeService.ThemeChanged -= OnThemeChanged;
 
             // ── 取消 SolutionEvents 订阅 ──
             try
