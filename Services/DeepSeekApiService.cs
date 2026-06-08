@@ -396,6 +396,49 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 request.Messages = cleanedMessages;
             }
 
+            // ── 规则 5：孤立 assistant-with-tool_calls 检测 ──
+            // 场景：ExploreAgent/PlanAgent 从 ContextManager 拿到父对话的 assistant(tool_calls)，
+            // 但对应 tool 结果不在 _entries 中，导致 assistant(tool_calls) 后直接跟 system/user。
+            // DeepSeek API 要求 assistant(tool_calls) 后必须紧跟 tool 消息 → 剥离 orphan tool_calls。
+            var finalMessages = request.Messages;
+            for (int i = 0; i < finalMessages.Count; i++)
+            {
+                var m = finalMessages[i];
+                if (m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Count > 0)
+                {
+                    // 收集该 assistant 的 tool_call IDs
+                    var expectedIds = new HashSet<string>(m.ToolCalls.Select(tc => tc.Id ?? ""));
+                    // 检查后续消息中是否有匹配的 tool 结果（至少出现一个才算合法）
+                    bool hasMatchingToolResult = false;
+                    for (int j = i + 1; j < finalMessages.Count; j++)
+                    {
+                        var next = finalMessages[j];
+                        if (next.Role == "tool" && !string.IsNullOrEmpty(next.ToolCallId)
+                            && expectedIds.Contains(next.ToolCallId))
+                        {
+                            hasMatchingToolResult = true;
+                            break;
+                        }
+                        // 遇到非 tool 消息 → 停止搜索，当前 assistant 的 tool_calls 已孤立
+                        if (next.Role != "tool") break;
+                    }
+                    if (!hasMatchingToolResult)
+                    {
+                        Logger.Warn($"[API] 检测到孤立 assistant-with-tool_calls (index={i}, toolCount={m.ToolCalls.Count})，剥离 tool_calls 以避免 HTTP 400");
+                        m.ToolCalls = null;
+                        m.ReasoningContent = null; // 无 tool_calls 时不应回传 reasoning_content
+                        if (string.IsNullOrEmpty(m.Content))
+                        {
+                            Logger.Warn($"[API] 孤立的 assistant 无 content，一并移除");
+                        }
+                    }
+                }
+            }
+            // 移除空的孤立 assistant（无 content 且 tool_calls 已被剥离）
+            request.Messages = finalMessages
+                .Where(m => !(m.Role == "assistant" && string.IsNullOrEmpty(m.Content) && (m.ToolCalls == null || m.ToolCalls.Count == 0)))
+                .ToList();
+
             // ── 预序列化请求体，供重试时复用 ──
             var requestJson = JsonSerializer.Serialize(request, new JsonSerializerOptions
             {
