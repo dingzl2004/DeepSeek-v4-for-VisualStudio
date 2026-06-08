@@ -220,7 +220,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     }
                 };
 
-                var opts = new JsonSerializerOptions { WriteIndented = true };
+                var opts = new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                };
                 string dumpJson = JsonSerializer.Serialize(dump, opts);
                 File.WriteAllText(filePath, dumpJson, Encoding.UTF8);
 
