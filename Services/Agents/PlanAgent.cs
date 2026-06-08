@@ -48,6 +48,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         {
             var explore = new ExploreAgent(apiService);
             RegisterExploreAgent(explore, ref _exploreAgent);
+            base.ExploreAgent = _exploreAgent; // 🔑 同步到基类，确保 ExecuteToolAsync 可见
         }
 
         #region Agent Definition
