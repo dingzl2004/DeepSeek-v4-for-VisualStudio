@@ -1950,6 +1950,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     {
                         SolutionPath = ctx.WorkspaceRoot ?? _solutionPath,
                         CancellationToken = CancellationToken.None,
+                        ContextManager = _contextManager,  // 注入对话历史，保持前缀缓存稳定
                     };
 
                     // ── 转发 ExploreAgent 日志到主流程，让用户看到探索进度 ──
