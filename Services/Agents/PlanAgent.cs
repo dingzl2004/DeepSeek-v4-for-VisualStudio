@@ -563,7 +563,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             AddLog("INFO", L["agent.log.planGeneratingJson"]);
             string json = await CallAiWithMessagesAsync(
                 messages, ct,
-                maxTokens: 8192, toolChoice: "none", temperature: 0.0, responseFormat: "json_object");
+                maxTokens: 16384, toolChoice: "none", temperature: 0.0, responseFormat: "json_object");
             AddLog("INFO", L["agent.log.planJsonReceived"]);
 
             // ── 诊断：记录原始响应用于调试 JSON 解析失败 ──
@@ -611,7 +611,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                     string retryResponse = await CallAiWithMessagesAsync(
                         retryMessages, ct,
-                        maxTokens: 4096, toolChoice: "none", temperature: 0.0, responseFormat: "json_object");
+                        maxTokens: 8192, toolChoice: "none", temperature: 0.0, responseFormat: "json_object");
 
                     retryResponse = StripDsmlContent(retryResponse);
                     retryResponse = ExtractJsonFromMarkdown(retryResponse);
@@ -640,6 +640,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     AddLog("WARN", string.Format(L["agent.plan.jsonRetryFailed"], retryEx.Message));
                     return (BuildFallbackPlan(userMessage), messages);
                 }
+            }
+
+            // ── 尝试修复截断的 JSON（max_tokens 不足时常见）──
+            string repairedJson = TryRepairTruncatedJson(json);
+            if (repairedJson != json)
+            {
+                AddLog("INFO", $"[Plan] JSON 截断修复已应用 (原={json.Length} chars, 修复后={repairedJson.Length} chars)");
+                json = repairedJson;
             }
 
             // ── 将 AI 的 JSON 响应追加到对话历史，供 Phase 3.5 plan.md 生成复用 ──

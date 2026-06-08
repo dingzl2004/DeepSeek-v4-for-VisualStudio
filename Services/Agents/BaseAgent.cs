@@ -2619,6 +2619,145 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
+        /// 尝试修复因 max_tokens 不足而被截断的 JSON。
+        /// 策略：计数字符串外的括号不平衡数，在末尾补充缺失的引号/方括号/花括号。
+        /// </summary>
+        /// <param name="json">可能截断的 JSON 字符串</param>
+        /// <returns>修复后的 JSON 字符串。如果无法安全修复则返回原字符串。</returns>
+        protected static string TryRepairTruncatedJson(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return json;
+            if (!json.TrimStart().StartsWith("{")) return json;
+
+            // 快速检查：如果末尾已经是 }，可能不需要修复
+            string trimmed = json.TrimEnd();
+            if (trimmed.EndsWith("}"))
+            {
+                // 验证括号平衡
+                if (IsJsonBracketBalanced(trimmed))
+                    return json;
+            }
+
+            bool inString = false;
+            bool escaped = false;
+            int braceDepth = 0;
+            int bracketDepth = 0;
+
+            for (int i = 0; i < json.Length; i++)
+            {
+                char c = json[i];
+
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (c == '\\' && inString)
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = !inString;
+                    continue;
+                }
+
+                if (inString) continue;
+
+                if (c == '{') braceDepth++;
+                else if (c == '}') braceDepth--;
+                else if (c == '[') bracketDepth++;
+                else if (c == ']') bracketDepth--;
+            }
+
+            var sb = new StringBuilder(json);
+
+            // 如果截断在字符串内部（未闭合的引号）
+            if (inString)
+            {
+                // 找到最后一个未转义的引号，在其后添加闭合引号
+                sb.Append("\"");
+            }
+
+            // 闭合未配对的数组
+            while (bracketDepth > 0)
+            {
+                sb.Append("]");
+                bracketDepth--;
+            }
+
+            // 闭合未配对的对象
+            while (braceDepth > 0)
+            {
+                sb.Append("}");
+                braceDepth--;
+            }
+
+            string repaired = sb.ToString();
+
+            // 验证修复结果（快速括号平衡检查）
+            if (IsJsonBracketBalanced(repaired) && repaired.TrimEnd().EndsWith("}"))
+                return repaired;
+
+            // 修复失败 → 尝试暴力闭合（找到最后一个 " 后闭合）
+            int lastQuote = json.LastIndexOf('"');
+            if (lastQuote > 0)
+            {
+                // 从最后一个引号处截断，闭合所有结构
+                string truncated = json.Substring(0, lastQuote + 1);
+                // 重新计算括号深度
+                braceDepth = 0;
+                bracketDepth = 0;
+                inString = false;
+                escaped = false;
+                for (int i = 0; i < truncated.Length; i++)
+                {
+                    char c2 = truncated[i];
+                    if (escaped) { escaped = false; continue; }
+                    if (c2 == '\\') { escaped = true; continue; }
+                    if (c2 == '"') { inString = !inString; continue; }
+                    if (inString) continue;
+                    if (c2 == '{') braceDepth++;
+                    else if (c2 == '}') braceDepth--;
+                    else if (c2 == '[') bracketDepth++;
+                    else if (c2 == ']') bracketDepth--;
+                }
+                var sb2 = new StringBuilder(truncated);
+                if (inString) sb2.Append("\"");
+                while (bracketDepth-- > 0) sb2.Append("]");
+                while (braceDepth-- > 0) sb2.Append("}");
+                return sb2.ToString();
+            }
+
+            return json; // 实在修不了，返回原文
+        }
+
+        /// <summary>
+        /// 快速检查 JSON 的花括号和方括号是否平衡。
+        /// </summary>
+        private static bool IsJsonBracketBalanced(string json)
+        {
+            int braceDepth = 0, bracketDepth = 0;
+            bool inString = false;
+            bool escaped = false;
+            foreach (char c in json)
+            {
+                if (escaped) { escaped = false; continue; }
+                if (c == '\\') { escaped = true; continue; }
+                if (c == '"') { inString = !inString; continue; }
+                if (inString) continue;
+                if (c == '{') braceDepth++;
+                else if (c == '}') braceDepth--;
+                else if (c == '[') bracketDepth++;
+                else if (c == ']') bracketDepth--;
+            }
+            return braceDepth == 0 && bracketDepth == 0;
+        }
+
+        /// <summary>
         /// 从 AI 返回结果中解析文件变更。
         /// 支持三种编辑格式：
         /// 1. ```file: 代码块（create_file / 全文件替换）
