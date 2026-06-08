@@ -61,6 +61,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         private ThemeMode _userThemeMode = ThemeMode.Auto;
 
         /// <summary>
+        /// 缓存的 VS 浅色主题状态（线程安全）。
+        /// 在 UI 线程初始化时设置，后续可从任意线程读取。
+        /// </summary>
+        private volatile bool _cachedIsVSThemeLight;
+
+        /// <summary>
         /// 用户设置的主题模式。
         /// </summary>
         public ThemeMode UserThemeMode
@@ -75,28 +81,35 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         }
 
         /// <summary>
-        /// VS 当前是否为浅色主题。
+        /// VS 当前是否为浅色主题（线程安全，使用缓存值）。
         /// 通过检查 VS 环境背景色判断（深色主题背景色接近黑色，浅色接近白色）。
         /// </summary>
         public bool IsVSThemeLight
         {
             get
             {
-                try
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    // 使用 VS 工具窗口背景色判断主题
-                    var bgColor = VSColorTheme.GetThemedColor(
-                        Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolWindowBackgroundBrushKey);
-                    // 亮度 > 128 则为浅色主题
-                    double brightness = (bgColor.R * 0.299 + bgColor.G * 0.587 + bgColor.B * 0.114);
-                    return brightness > 128;
-                }
-                catch
-                {
-                    // 后台线程或 VS 未就绪时默认深色
-                    return false;
-                }
+                // 首先尝试返回缓存值（任意线程安全）
+                return _cachedIsVSThemeLight;
+            }
+        }
+
+        /// <summary>
+        /// 在 UI 线程上刷新 VS 主题缓存。
+        /// </summary>
+        public void RefreshVSThemeCache()
+        {
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var bgColor = VSColorTheme.GetThemedColor(
+                    Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolWindowBackgroundBrushKey);
+                double brightness = (bgColor.R * 0.299 + bgColor.G * 0.587 + bgColor.B * 0.114);
+                _cachedIsVSThemeLight = brightness > 128;
+                Logger.Info($"[ThemeService] VS theme cache refreshed: IsLight={_cachedIsVSThemeLight}, brightness={brightness:F0}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[ThemeService] Failed to refresh VS theme cache: {ex.Message}");
             }
         }
 
@@ -147,8 +160,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             try
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
+                // 初始化时刷新缓存
+                RefreshVSThemeCache();
                 VSColorTheme.ThemeChanged += OnVSThemeChanged;
-                Logger.Info($"[ThemeService] Subscribed to VSColorTheme.ThemeChanged. Current theme light={IsVSThemeLight}");
+                Logger.Info($"[ThemeService] Subscribed to VSColorTheme.ThemeChanged. Current theme light={_cachedIsVSThemeLight}");
             }
             catch (Exception ex)
             {
@@ -159,6 +174,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         private void OnVSThemeChanged(ThemeChangedEventArgs e)
         {
             Logger.Info($"[ThemeService] VS theme changed.");
+            // 先刷新缓存，再通知
+            RefreshVSThemeCache();
             if (_userThemeMode == ThemeMode.Auto)
             {
                 OnThemeChanged();

@@ -445,6 +445,16 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             // ── 订阅解决方案事件，切换解决方案时自动重载对话 ──
             _ = WireSolutionEventsAsync();
+
+            // ── 初始应用当前主题（浅色/深色）──
+            // 必须在 UI 线程上执行，且 WebView2 就绪后再应用
+            _ = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                // 等待 WebView2 初始化完成后再应用主题
+                await Task.Delay(500); // 给 WebView2 初始化留出时间
+                ApplyInitialTheme();
+            });
         }
 
         #endregion

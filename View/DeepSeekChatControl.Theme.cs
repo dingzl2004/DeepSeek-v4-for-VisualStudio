@@ -531,6 +531,36 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
+        /// 启动时初始化应用当前主题（WPF 颜色 + WebView2 重载）。
+        /// 在 WebView2 就绪后调用，确保 WebView2 内容使用正确的 CSS。
+        /// </summary>
+        internal void ApplyInitialTheme()
+        {
+            try
+            {
+                Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+                bool isLight = _themeService.IsLight;
+                Logger.Info($"[Theme] ApplyInitialTheme: IsLight={isLight}");
+
+                // 应用 WPF 颜色
+                ApplyWpfTheme(isLight);
+                UpdateThemeToggleIcon();
+
+                // 如果 WebView2 已就绪且有消息，重载以应用正确 CSS
+                if (ChatWebView?.CoreWebView2 != null && _messages.Count > 0)
+                {
+                    string newHtml = ChatHtmlService.BuildInitialPage(_messages);
+                    ChatWebView.CoreWebView2.NavigateToString(newHtml);
+                    Logger.Info("[Theme] ApplyInitialTheme: WebView2 reloaded");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Theme] ApplyInitialTheme error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// 主题变更后重新加载 WebView2 内容。
         /// 如果 WebView 已就绪且有消息，则重新渲染所有消息。
         /// </summary>
