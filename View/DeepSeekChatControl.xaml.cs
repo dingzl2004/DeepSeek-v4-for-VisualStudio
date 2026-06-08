@@ -298,6 +298,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             ModelComboBox.SelectedIndex = 0;
 
             EffortComboBox.ItemsSource = new[] { "high", "max" };
+            // 推理强度初始值稍后在 StartControl 中从设置恢复（此时 _options 尚未赋值）
             EffortComboBox.SelectedIndex = 0;
 
             // 初始化审批模式下拉框
@@ -417,6 +418,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
             // ── 从设置恢复审批模式 ──
             RefreshApprovalModeFromSettings();
+
+            // ── 从设置恢复推理强度 ──
+            RefreshReasoningEffortFromSettings();
 
             InitializeWebSearchService();
             InitializeApiService();
@@ -967,6 +971,23 @@ namespace DeepSeek_v4_for_VisualStudio.View
             };
             if (ApprovalModeComboBox.SelectedIndex < 0)
                 ApprovalModeComboBox.SelectedValue = Models.ApprovalMode.SmartBlock;
+        }
+
+        /// <summary>
+        /// 从设置恢复推理强度下拉框选中值。
+        /// </summary>
+        private void RefreshReasoningEffortFromSettings()
+        {
+            if (EffortComboBox == null || _options == null) return;
+            string savedEffort = _options.ReasoningEffort ?? "high";
+            EffortComboBox.SelectedItem = savedEffort == "max" ? "max" : "high";
+
+            // 同步更新 API 服务的推理强度
+            if (_apiService != null)
+            {
+                bool enabled = ThinkingCheckBox.IsChecked == true;
+                _apiService.ConfigureThinking(enabled, savedEffort);
+            }
         }
 
         /// <summary>

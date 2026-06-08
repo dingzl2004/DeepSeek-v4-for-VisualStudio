@@ -1313,6 +1313,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         Models.ApprovalMode.AllowAll => "AllowAll",
                         _ => "SmartBlock",
                     };
+                    // 立即写入存储，确保重启 VS 后仍然生效
+                    try { _options.SaveSettingsToStorage(); } catch { /* 非关键路径 */ }
                 }
                 Logger.Info($"审批模式切换为: {mode}");
             }
@@ -1346,6 +1348,13 @@ namespace DeepSeek_v4_for_VisualStudio.View
             {
                 bool enabled = ThinkingCheckBox.IsChecked == true;
                 _apiService.ConfigureThinking(enabled, effort);
+                // 持久化到设置
+                if (_options != null)
+                {
+                    _options.ReasoningEffort = effort;
+                    // 立即写入存储，确保重启 VS 后仍然生效
+                    try { _options.SaveSettingsToStorage(); } catch { /* 非关键路径 */ }
+                }
                 Logger.Info($"推理强度切换为: {effort}");
             }
         }
