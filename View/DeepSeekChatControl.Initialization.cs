@@ -263,12 +263,12 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     }
                     else
                     {
-                        StatusLabel.Text = $"设置已更新 (搜索引擎: {_webSearchEngine})";
+                        StatusLabel.Text = string.Format(LocalizationService.Instance["status.settings.updated"], _webSearchEngine);
                     }
                 }
                 else
                 {
-                    StatusLabel.Text = $"设置已更新 (默认引擎: {resolvedEngine})";
+                    StatusLabel.Text = string.Format(LocalizationService.Instance["status.settings.updated.default"], resolvedEngine);
                 }
             }
             catch (Exception ex)

@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:utils="clr-namespace:DeepSeek_v4_for_VisualStudio.Utils"
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="600">
     <UserControl.Resources>
@@ -742,7 +743,8 @@
 
                 <!-- 左侧：审批模式 -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <TextBlock Text="审批模式:"
+                    <TextBlock x:Name="ApprovalModeLabel"
+                               Text="{utils:I18n chat.approvalModeLabel}"
                                Foreground="#D4D4D4"
                                FontSize="12"
                                VerticalAlignment="Center"

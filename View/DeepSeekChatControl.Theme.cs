@@ -448,16 +448,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
         {
             try
             {
-                if (ApprovalModeComboBox?.Parent is StackPanel sp)
+                if (ApprovalModeLabel != null)
                 {
-                    foreach (var child in sp.Children)
-                    {
-                        if (child is TextBlock tb && tb.Text.Contains("审批"))
-                        {
-                            tb.Foreground = textColor;
-                            break;
-                        }
-                    }
+                    ApprovalModeLabel.Foreground = textColor;
                 }
             }
             catch { }

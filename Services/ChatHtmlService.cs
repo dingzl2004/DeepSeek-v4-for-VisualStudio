@@ -496,7 +496,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
     var saveBtn=document.createElement('button');
     saveBtn.className='inline-edit-btn-save';
-    saveBtn.textContent='✅ 确认修改';
+    saveBtn.textContent='{EscapeJsString(L["chat.html.confirmEditButton"])}';
     saveBtn.onclick=function(){{
         var textEl=document.getElementById('inline-textarea-{messageIndex}');
         var val=textEl?textEl.value:'';
@@ -506,7 +506,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
     var cancelBtn=document.createElement('button');
     cancelBtn.className='inline-edit-btn-cancel';
-    cancelBtn.textContent='❌ 取消';
+    cancelBtn.textContent='{EscapeJsString(L["chat.html.cancelButton"])}';
     cancelBtn.onclick=function(){{window.__editMessageCancel({messageIndex});}};
     actions.appendChild(cancelBtn);
 
