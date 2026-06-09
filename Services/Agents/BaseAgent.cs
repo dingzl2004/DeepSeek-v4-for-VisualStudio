@@ -2348,7 +2348,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
-        /// 确保 ExploreAgent 的日志转发到当前 Agent。
+        /// 确保 ExploreAgent 的日志、权限请求和提问请求转发到当前 Agent。
         /// 供 AgentFactory 在注入 ExploreAgent 引用后调用（AgentFactory 无法访问 protected RegisterExploreAgent）。
         /// </summary>
         public void WireExploreLogs()
@@ -2358,6 +2358,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 // 先移除防止重复订阅，再重新订阅
                 ExploreAgent.LogEntryAdded -= OnExploreLog;
                 ExploreAgent.LogEntryAdded += OnExploreLog;
+                ExploreAgent.PermissionRequested -= OnExplorePermissionRequested;
+                ExploreAgent.PermissionRequested += OnExplorePermissionRequested;
+                ExploreAgent.QuestionsRequested -= OnExploreQuestionsRequested;
+                ExploreAgent.QuestionsRequested += OnExploreQuestionsRequested;
             }
         }
 
