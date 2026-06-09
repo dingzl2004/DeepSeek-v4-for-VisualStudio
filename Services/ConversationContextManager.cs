@@ -125,6 +125,49 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// </summary>
         public int CacheWindowMaxEntries { get; set; } = 80;
 
+        // ── 🔑 缓存边界快照（v1.1.10）──
+        //     Agent Handoff 时，在注入过渡消息前保存 _entries 的快照索引，
+        //     目标 Agent 可调用 BuildApiMessagesUpToSnapshot() 仅包含边界前的历史，
+        //     使前缀缓存跨 Agent 切换时仍能命中。
+        //     null = 未设置快照（正常会话模式）。
+
+        /// <summary>缓存边界快照：应在 Handoff 前由源 Agent 设置</summary>
+        private int? _cacheSnapshotEntryIndex;
+
+        /// <summary>
+        /// 🔑 缓存边界快照时的 dynamicBlock 冻结副本（v1.1.10）。
+        /// 快照活跃时，BuildApiMessages 使用此冻结版本替代实时 BuildDynamicContextBlock()，
+        /// 防止压缩摘要/搜索/RAG/记忆等动态内容变化导致前缀缓存断裂。
+        /// null = 无快照或快照时 dynamicBlock 为空。
+        /// </summary>
+        private string? _cachedDynamicBlock;
+
+        /// <summary>
+        /// 保存缓存边界快照：记录当前 _entries 的数量作为缓存前缀边界，
+        /// 同时冻结当前的 dynamicBlock 文本，防止动态上下文变化破坏前缀缓存。
+        /// Agent Handoff 前调用，确保目标 Agent 可排除过渡消息、复用缓存前缀。
+        /// </summary>
+        public void SnapshotForCache()
+        {
+            _cacheSnapshotEntryIndex = _entries.Count;
+            _cachedDynamicBlock = BuildDynamicContextBlock();
+            Logger.Info($"[ContextManager] 🔑 缓存边界快照已保存: entryIndex={_cacheSnapshotEntryIndex}, dynamicBlock={(_cachedDynamicBlock?.Length ?? 0)}chars");
+        }
+
+        /// <summary>
+        /// 清除缓存边界快照，恢复完整历史模式。
+        /// </summary>
+        public void ClearCacheSnapshot()
+        {
+            _cacheSnapshotEntryIndex = null;
+            _cachedDynamicBlock = null;
+        }
+
+        /// <summary>
+        /// 是否有活跃的缓存边界快照。
+        /// </summary>
+        public bool HasCacheSnapshot => _cacheSnapshotEntryIndex.HasValue;
+
         /// <summary>获取当前对话轮次数（一个 user 消息 = 一轮）</summary>
         public int TurnCount => _entries.Count(e => e.Role == "user");
 
@@ -301,6 +344,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // ── 安全净化：防止工具注入标记进入上下文 ──
             content = StringExtensions.SanitizeUserInput(content);
 
+            // ── 🔑 缓存边界快照：新用户消息意味着新对话轮次，清除旧快照 ──
+            if (_cacheSnapshotEntryIndex.HasValue)
+            {
+                Logger.Info($"[ContextManager] 🔑 新用户消息，清除缓存边界快照 (was at entry {_cacheSnapshotEntryIndex})");
+                _cacheSnapshotEntryIndex = null;
+            }
+
             _entries.Add(new ContextEntry
             {
                 Role = "user",
@@ -348,6 +398,34 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// <param name="toolCalls">工具调用列表（可为 null）</param>
         public void AddAssistantMessage(string? content, string? reasoningContent = null, List<ToolCall>? toolCalls = null)
         {
+            // ── 🔑 前缀缓存优化：写时合并连续 assistant 消息 ──
+            //     如果上一条也是 assistant（无 tool_calls），合并内容而非新增条目，
+            //     避免 BuildApiMessages 产生连续 assistant 消息，进而触发 ChatStreamAsync
+            //     的合并逻辑修改消息内容 → 破坏 DeepSeek Prefix Cache 前缀。
+            if (_entries.Count > 0)
+            {
+                var last = _entries[_entries.Count - 1];
+                if (last.Role == "assistant"
+                    && (last.ToolCalls == null || last.ToolCalls.Count == 0)
+                    && (toolCalls == null || toolCalls.Count == 0))
+                {
+                    // 两条纯文本 assistant → 合并到上一条
+                    if (!string.IsNullOrWhiteSpace(content))
+                    {
+                        last.Content = string.IsNullOrWhiteSpace(last.Content)
+                            ? content
+                            : last.Content + "\n\n---\n\n" + content;
+                    }
+                    // 如果后者有 reasoning_content，保留后者
+                    if (!string.IsNullOrWhiteSpace(reasoningContent))
+                        last.ReasoningContent = reasoningContent;
+                    _estimatedTokens += EstimateTokens(content);
+                    if (!string.IsNullOrEmpty(reasoningContent))
+                        _estimatedTokens += EstimateTokens(reasoningContent);
+                    return;
+                }
+            }
+
             _entries.Add(new ContextEntry
             {
                 Role = "assistant",
@@ -476,13 +554,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             //     先确定缓存窗口边界，将窗口外的旧轮次压缩为摘要（异步），
             //     再构建动态块（包含压缩摘要、搜索、RAG、记忆）。
             //     这样 messages[0..2] 结构保持稳定，只有窗口内的对话历史会变化。
+            //
+            //     🔑 快照冻结（v1.1.10）：若快照活跃，使用冻结的 dynamicBlock，
+            //        防止压缩摘要/搜索/RAG/记忆变化导致前缀缓存断裂。
             int cacheWindowStart = FindCacheWindowStart();
             if (cacheWindowStart > 0)
             {
                 CompressEntriesBeforeWindow(cacheWindowStart);
             }
 
-            string? dynamicBlock = BuildDynamicContextBlock();
+            string? dynamicBlock = _cachedDynamicBlock ?? BuildDynamicContextBlock();
             if (!string.IsNullOrWhiteSpace(dynamicBlock))
             {
                 messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock });
@@ -491,8 +572,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // ── 4. 遍历缓存窗口内的对话历史，正确构建消息 ──
             //     仅包含窗口内的条目（旧条目已在步骤 3 被压缩或丢弃），
             //     确保 messages 数组大小稳定，使 DeepSeek 能检测公共前缀。
-            foreach (var entry in _entries)
+            //
+            //     🔑 缓存边界快照（v1.1.10）：若有活跃快照，仅包含边界前的条目，
+            //        边界后的条目（Handoff 过渡消息）被排除以保护前缀缓存。
+            int entryLimit = _cacheSnapshotEntryIndex ?? _entries.Count;
+            for (int i = 0; i < _entries.Count && i < entryLimit; i++)
             {
+                var entry = _entries[i];
                 // 跳过没有内容的条目（除非有 tool_calls）
                 if (string.IsNullOrEmpty(entry.Content) && (entry.ToolCalls == null || entry.ToolCalls.Count == 0))
                     continue;
@@ -778,7 +864,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock });
 
             // ── 4. 从 startEntryIdx 开始构建对话历史 ──
-            for (int i = startEntryIdx; i < _entries.Count; i++)
+            //     🔑 缓存边界快照（v1.1.10）：若有活跃快照，上限为边界索引
+            int entryEnd = _cacheSnapshotEntryIndex ?? _entries.Count;
+            for (int i = startEntryIdx; i < _entries.Count && i < entryEnd; i++)
             {
                 var entry = _entries[i];
                 if (string.IsNullOrEmpty(entry.Content) && (entry.ToolCalls == null || entry.ToolCalls.Count == 0))
@@ -1307,6 +1395,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             _memoryContext = null;
             _compressor?.Clear();
             _prefixCacheManager?.Reset();
+            _cacheSnapshotEntryIndex = null;
+            _cachedDynamicBlock = null;
         }
 
         /// <summary>

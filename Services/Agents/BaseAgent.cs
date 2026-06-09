@@ -525,13 +525,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             var ctxManager = Context?.ContextManager;
             if (ctxManager != null && !ctxManager.IsEmpty && maxRecentTurns > 0)
             {
-                // 注入压缩摘要（早期对话的精简版本）
-                if (ctxManager.Compressor != null)
-                {
-                    string compressedText = ctxManager.Compressor.GetCompressedContextText();
-                    if (!string.IsNullOrWhiteSpace(compressedText))
-                        messages.Add(new ChatApiMessage { Role = "system", Content = compressedText });
-                }
+                // ── 🔑 压缩摘要已由 BuildApiMessagesRecentTurns → BuildDynamicContextBlock 统一注入，
+                //    此处不再重复添加，避免同一条压缩摘要作为两条 system 消息出现，
+                //    浪费 token 且产生额外的不稳定前缀位置。
 
                 // 注入最近 N 轮的原始消息（保留 tool 调用链完整性）
                 var recentMessages = ctxManager.BuildApiMessagesRecentTurns(maxRecentTurns);
@@ -1954,6 +1950,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 throw new InvalidOperationException("AgentFactory 引用为空，无法获取目标 Agent");
 
             targetAgent.Context = context;
+
+            // ── 🔑 缓存边界快照（v1.1.10）：在 Handoff 前保存 ContextManager 状态 ──
+            //     目标 Agent 通过 BuildApiMessages 读取历史时，仅包含边界前的条目，
+            //     排除 Handoff 过渡消息（步骤完成通知、最终构建结果等），
+            //     使 DeepSeek Prefix Cache 在跨 Agent 切换时仍能命中。
+            context.ContextManager?.SnapshotForCache();
 
             // ── 构建 Handoff prompt（包含完整计划上下文）──
             var sb = new StringBuilder();

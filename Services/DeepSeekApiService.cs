@@ -315,6 +315,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // 1. tool 消息必须有 tool_call_id
             // 2. assistant 消息有 tool_calls 时可以没有 content，但不能既无 content 又无 tool_calls
             // 3. 不能有连续的相同 role 消息（user-user, assistant-assistant）→ 合并而非丢弃
+            //
+            // 🔑 缓存关键（v1.1.10）：所有清理操作在 SHALLOW CLONE 上进行，
+            //    不修改原始 ChatApiMessage 对象，确保下次请求的前缀不变，
+            //    DeepSeek Prefix Cache 可持续命中。
             var cleanedMessages = new List<ChatApiMessage>();
             string? lastRole = null;
             int removedCount = 0;
@@ -339,24 +343,34 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     continue;
                 }
 
-                // ── 规则 3：assistant 消息有 tool_calls 但缺少 reasoning_content → 补全 ──
-                if (msg.Role == "assistant" && msg.ToolCalls != null && msg.ToolCalls.Count > 0 && msg.ReasoningContent == null)
+                // ── 浅克隆：后续所有修改仅影响克隆对象，不污染调用方原始消息 ──
+                var clone = new ChatApiMessage
                 {
-                    Logger.Warn("[API] assistant 消息包含 tool_calls 但缺少 ReasoningContent — 注入空字符串以避免 400");
-                    msg.ReasoningContent = string.Empty;
+                    Role = msg.Role,
+                    Content = msg.Content,
+                    ReasoningContent = msg.ReasoningContent,
+                    ToolCalls = msg.ToolCalls,
+                    ToolCallId = msg.ToolCallId,
+                    Name = msg.Name,
+                };
+
+                // ── 规则 3：assistant 消息有 tool_calls 但缺少 reasoning_content → 补全 ──
+                if (clone.Role == "assistant" && clone.ToolCalls != null && clone.ToolCalls.Count > 0 && clone.ReasoningContent == null)
+                {
+                    clone.ReasoningContent = string.Empty;
                 }
 
                 // ── 规则 4：防止连续相同 role（DeepSeek API 要求 user/assistant 交替）──
                 // tool 消息连续出现是合法的（多个工具调用结果），不检查
                 // 对于连续 user 或 assistant 消息，合并内容而非丢弃
-                if (lastRole != null && msg.Role == lastRole
-                    && (msg.Role == "user" || msg.Role == "assistant"))
+                if (lastRole != null && clone.Role == lastRole
+                    && (clone.Role == "user" || clone.Role == "assistant"))
                 {
                     if (cleanedMessages.Count > 0)
                     {
                         var lastMsg = cleanedMessages[cleanedMessages.Count - 1];
                         string existingContent = lastMsg.Content ?? string.Empty;
-                        string newContent = msg.Content ?? string.Empty;
+                        string newContent = clone.Content ?? string.Empty;
 
                         if (!string.IsNullOrWhiteSpace(newContent))
                         {
@@ -364,27 +378,23 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                             lastMsg.Content = string.IsNullOrWhiteSpace(existingContent)
                                 ? newContent
                                 : existingContent + "\n\n---\n\n" + newContent;
-                            Logger.Warn($"[API] 合并连续的 {msg.Role} 消息（内容已拼接，防止数据丢失）");
                         }
-                        else
-                        {
-                            Logger.Warn($"[API] 跳过连续的空 {msg.Role} 消息");
-                        }
+                        // else: 后者无内容，直接跳过（保留前者的内容）
 
                         // 如果后者有 reasoning_content，保留后者
-                        if (!string.IsNullOrWhiteSpace(msg.ReasoningContent))
-                            lastMsg.ReasoningContent = msg.ReasoningContent;
+                        if (!string.IsNullOrWhiteSpace(clone.ReasoningContent))
+                            lastMsg.ReasoningContent = clone.ReasoningContent;
                         // 如果后者有 tool_calls，保留后者
-                        if (msg.ToolCalls != null && msg.ToolCalls.Count > 0)
-                            lastMsg.ToolCalls = msg.ToolCalls;
+                        if (clone.ToolCalls != null && clone.ToolCalls.Count > 0)
+                            lastMsg.ToolCalls = clone.ToolCalls;
 
                         mergedCount++;
                         continue;
                     }
                 }
 
-                cleanedMessages.Add(msg);
-                lastRole = msg.Role;
+                cleanedMessages.Add(clone);
+                lastRole = clone.Role;
             }
 
             if (removedCount > 0 || mergedCount > 0)
