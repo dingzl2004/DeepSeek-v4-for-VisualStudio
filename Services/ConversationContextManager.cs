@@ -661,7 +661,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             if (_activeFileTracker != null)
             {
                 string wsRoot = !string.IsNullOrWhiteSpace(_workspaceRoot)
-                    ? _workspaceRoot
+                    ? _workspaceRoot!
                     : Environment.CurrentDirectory;
                 string activeFileSummary = _activeFileTracker.GetActiveFileSummary(wsRoot);
                 if (!string.IsNullOrWhiteSpace(activeFileSummary))
@@ -670,15 +670,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
             // 搜索上下文
             if (!string.IsNullOrWhiteSpace(_searchContext))
-                parts.Add(_searchContext);
+                parts.Add(_searchContext!);
 
             // RAG 检索上下文
             if (!string.IsNullOrWhiteSpace(_ragContext))
-                parts.Add(_ragContext);
+                parts.Add(_ragContext!);
 
             // 记忆上下文
             if (!string.IsNullOrWhiteSpace(_memoryContext))
-                parts.Add(_memoryContext);
+                parts.Add(_memoryContext!);
 
             if (parts.Count == 0)
                 return null;
@@ -1029,7 +1029,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
             int chineseChars = 0;
             int otherChars = 0;
-            foreach (char c in text)
+            foreach (char c in text!)
             {
                 // CJK 统一表意文字 + CJK 扩展
                 if ((c >= 0x4E00 && c <= 0x9FFF) ||
@@ -1359,7 +1359,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                         break;
                     case "tool":
                         if (!string.IsNullOrEmpty(msg.ToolCallId))
-                            AddToolResult(msg.ToolCallId, msg.Name ?? "unknown", msg.Content ?? string.Empty);
+                            AddToolResult(msg.ToolCallId!, msg.Name ?? "unknown", msg.Content ?? string.Empty);
                         break;
                     case "system":
                         AddCustomMessage("system", msg.Content ?? string.Empty);

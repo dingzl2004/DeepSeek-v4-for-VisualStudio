@@ -1503,7 +1503,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                         if (exploreResult.Success && !string.IsNullOrEmpty(exploreResult.Content))
                         {
-                            AddLog("INFO", $"[{Definition.Name}] ExploreAgent 完成: {exploreResult.Content.Length} 字符");
+                            AddLog("INFO", $"[{Definition.Name}] ExploreAgent 完成: {exploreResult.Content!.Length} 字符");
                             return exploreResult.Content;
                         }
 
@@ -1714,10 +1714,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 string? targetPath = ExtractAnyPathFromToolArgs(toolName, argumentsJson);
                 if (!string.IsNullOrWhiteSpace(targetPath)
                     && !string.IsNullOrWhiteSpace(workspaceRoot)
-                    && IsPathOutsideWorkspace(targetPath, workspaceRoot))
+                    && IsPathOutsideWorkspace(targetPath!, workspaceRoot!))
                 {
                     string operation = GetToolOperationName(toolName);
-                    string fileName = System.IO.Path.GetFileName(targetPath.TrimEnd('/', '\\'));
+                    string fileName = System.IO.Path.GetFileName(targetPath!.TrimEnd('/', '\\'));
                     string displayName = string.IsNullOrEmpty(fileName) ? targetPath : fileName;
 
                     bool approved = await RequestPermissionAsync(
@@ -1873,13 +1873,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     && !string.IsNullOrWhiteSpace(msg.Content))
                 {
                     // 去重：相同内容的 tool 结果只保留一份
-                    string hash = ComputeSimpleHash(msg.Content);
+                    string hash = ComputeSimpleHash(msg.Content!);
                     if (!seenHashes.Add(hash))
                         continue;
 
                     if (sb.Length > 0)
                         sb.AppendLine("\n---\n");
-                    sb.AppendLine(msg.Content.Truncate(2048));
+                    sb.AppendLine(msg.Content!.Truncate(2048));
 
                     // 截断保护
                     if (sb.Length > maxBytes)
@@ -3573,7 +3573,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             // ── 构建候选列表：排除已修改文件，计算加权 LRU 分数 ──
             var candidates = new List<(string Path, string Content, double Score)>();
-            bool allScoresZero = true;
 
             foreach (var kvp in fileCache)
             {
@@ -3589,7 +3588,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                 // 分数 = 距今轮数 / 类型权重（越小越优先）
                 double score = roundsAgo / typeWeight;
-                if (roundsAgo > 0) allScoresZero = false;
 
                 // ── P1-4: 首轮退化 tiebreaker ──
                 // 当所有文件 roundsAgo=0 时，小文件优先（更高的信息密度）
