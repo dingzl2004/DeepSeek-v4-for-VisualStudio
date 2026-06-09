@@ -1007,6 +1007,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             toolCalls);
                     }
 
+                    // ── 🔑 子Agent缓存优化：在执行工具前保存当前消息列表，
+                    //     供runSubagent(ExploreAgent)复用父Agent的缓存前缀。──
+                    if (Context != null && toolCalls.Any(tc => tc.Function.Name == "runSubagent"))
+                    {
+                        Context.ForwardedMessages = new List<ChatApiMessage>(messages);
+                    }
+
                     // ── 并行执行工具调用（带超时保护，长时工具使用更长超时，已去重）──
                     //    被白名单拦截的工具跳过执行，直接返回拒绝消息。
                     var toolTasks = dedupedIndices.Select(idx =>
@@ -1433,6 +1440,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 {
                     try
                     {
+                        // ── 🔑 子Agent缓存优化：消费父Agent保存的ForwardedMessages，
+                        //     使ExploreAgent复用父Agent的API缓存前缀。──
+                        ctx.ForwardedMessages = Context?.ForwardedMessages;
+                        if (Context != null)
+                            Context.ForwardedMessages = null; // 消费后清空
+
                         // ── 同步上下文到 ExploreAgent ──
                         ExploreAgent.Context = this.Context;
                         if (ExploreAgent.BuiltInTools == null)
@@ -1454,6 +1467,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             ContextManager = Context?.ContextManager,
                             FileReadCache = exploreFileCache,
                             DiscoveredFiles = Context?.DiscoveredFiles,
+                            // 🔑 子Agent缓存优化：继承父Agent当前消息列表作为前缀，
+                            //    使ExploreAgent的首轮API调用可复用父Agent的缓存前缀。
+                            ForwardedMessages = ctx.ForwardedMessages,
                         };
 
                         AddLog("INFO", $"[{Definition.Name}] → ExploreAgent: {ctx.Description}");
