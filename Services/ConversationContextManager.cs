@@ -535,20 +535,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             //     现在固定在 messages[1]，确保主流程与 Agent 子调用的前缀结构一致，
             //     DeepSeek 前缀缓存在跨路径切换时仍能命中。
             //     内容 = 用户自定义 prompt + AskAgent prompt + MultiAgent + Memory + Workspace + Skill 上下文。
-            string? fixedPrompt = _fixedSystemPrompt;
-            if (!string.IsNullOrWhiteSpace(fixedPrompt))
-            {
-                messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt });
-            }
-            else
-            {
-                // 回退：尚未冻结时使用动态拼接（兼容旧调用路径）
-                string? fallbackPrompt = BuildFinalSystemPrompt();
-                if (!string.IsNullOrWhiteSpace(fallbackPrompt))
-                {
-                    messages.Add(new ChatApiMessage { Role = "system", Content = fallbackPrompt });
-                }
-            }
+            //
+            //     🔑 v1.1.11：始终占据 messages[1] 位置（即使为空），避免 null/非null
+            //         交替导致后续消息位移，破坏前缀缓存。
+            string? fixedPrompt = _fixedSystemPrompt
+                ?? (string.IsNullOrWhiteSpace(_systemPrompt) && string.IsNullOrWhiteSpace(_skillContext) ? null : BuildFinalSystemPrompt());
+            messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt ?? string.Empty });
 
             // ── 3. 缓存窗口裁剪 + 动态上下文块 ──
             //     先确定缓存窗口边界，将窗口外的旧轮次压缩为摘要（异步），
@@ -568,10 +560,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             }
 
             string? dynamicBlock = _cachedDynamicBlock ?? BuildDynamicContextBlock();
-            if (!string.IsNullOrWhiteSpace(dynamicBlock))
-            {
-                messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock });
-            }
+            // ── 🔑 v1.1.11：始终占据 messages[2] 位置（即使为空），
+            //     避免压缩触发前 null/触发后非null 的交替导致后续消息位移。──
+            messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock ?? string.Empty });
 
             // ── 4. 遍历缓存窗口内的对话历史，正确构建消息 ──
             //     仅包含窗口内的条目（旧条目已在步骤 3 被压缩或丢弃），
@@ -856,22 +847,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             }
 
             // ── 2. Agent 专属系统提示词（固定位置，在历史之前）──
-            string? fixedPrompt = _fixedSystemPrompt;
-            if (!string.IsNullOrWhiteSpace(fixedPrompt))
-            {
-                messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt });
-            }
-            else
-            {
-                string? fallbackPrompt = BuildFinalSystemPrompt();
-                if (!string.IsNullOrWhiteSpace(fallbackPrompt))
-                    messages.Add(new ChatApiMessage { Role = "system", Content = fallbackPrompt });
-            }
+            //     🔑 v1.1.11：始终占据固定位置（即使为空），与 BuildApiMessages 对齐。
+            string? fixedPrompt = _fixedSystemPrompt
+                ?? (string.IsNullOrWhiteSpace(_systemPrompt) && string.IsNullOrWhiteSpace(_skillContext) ? null : BuildFinalSystemPrompt());
+            messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt ?? string.Empty });
 
             // ── 3. 动态上下文块（固定位置，在历史之前）──
+            //     🔑 v1.1.11：始终占据固定位置（即使为空），避免压缩触发前后的位置位移。
             string? dynamicBlock = BuildDynamicContextBlock();
-            if (!string.IsNullOrWhiteSpace(dynamicBlock))
-                messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock });
+            messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock ?? string.Empty });
 
             // ── 4. 从 startEntryIdx 开始构建对话历史 ──
             //     🔑 缓存边界快照（v1.1.10）：若有活跃快照，上限为边界索引
