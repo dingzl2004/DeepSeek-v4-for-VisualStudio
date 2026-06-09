@@ -411,6 +411,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             // 但对应 tool 结果不在 _entries 中，导致 assistant(tool_calls) 后直接跟 system/user。
             // DeepSeek API 要求 assistant(tool_calls) 后必须紧跟 tool 消息 → 剥离 orphan tool_calls。
             var finalMessages = request.Messages;
+            int rule5StrippedCount = 0;
             for (int i = 0; i < finalMessages.Count; i++)
             {
                 var m = finalMessages[i];
@@ -420,6 +421,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     var expectedIds = new HashSet<string>(m.ToolCalls.Select(tc => tc.Id ?? ""));
                     // 检查后续消息中是否有匹配的 tool 结果（至少出现一个才算合法）
                     bool hasMatchingToolResult = false;
+                    int stopAtIndex = -1;
                     for (int j = i + 1; j < finalMessages.Count; j++)
                     {
                         var next = finalMessages[j];
@@ -430,24 +432,39 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                             break;
                         }
                         // 遇到非 tool 消息 → 停止搜索，当前 assistant 的 tool_calls 已孤立
-                        if (next.Role != "tool") break;
+                        if (next.Role != "tool")
+                        {
+                            stopAtIndex = j;
+                            break;
+                        }
                     }
                     if (!hasMatchingToolResult)
                     {
-                        Logger.Warn($"[API] 检测到孤立 assistant-with-tool_calls (index={i}, toolCount={m.ToolCalls.Count})，剥离 tool_calls 以避免 HTTP 400");
+                        var tcNames = string.Join(", ", m.ToolCalls.Select(tc => tc.Function?.Name ?? "?"));
+                        string stopReason = stopAtIndex >= 0
+                            ? $"遇到非tool消息[{stopAtIndex}](role={finalMessages[stopAtIndex].Role})"
+                            : "到达消息列表末尾";
+                        Logger.Warn($"[API] Rule5 孤立 assistant[{i}]: toolCount={m.ToolCalls.Count} names=[{tcNames}] stopReason={stopReason} hasContent={!string.IsNullOrEmpty(m.Content)}");
                         m.ToolCalls = null;
                         m.ReasoningContent = null; // 无 tool_calls 时不应回传 reasoning_content
+                        rule5StrippedCount++;
                         if (string.IsNullOrEmpty(m.Content))
                         {
-                            Logger.Warn($"[API] 孤立的 assistant 无 content，一并移除");
+                            Logger.Warn($"[API] Rule5 孤立的 assistant[{i}] 无 content，标记移除");
                         }
                     }
                 }
             }
             // 移除空的孤立 assistant（无 content 且 tool_calls 已被剥离）
+            int beforeRemove = request.Messages.Count;
             request.Messages = finalMessages
                 .Where(m => !(m.Role == "assistant" && string.IsNullOrEmpty(m.Content) && (m.ToolCalls == null || m.ToolCalls.Count == 0)))
                 .ToList();
+            int removedEmptyAssistants = beforeRemove - request.Messages.Count;
+            if (rule5StrippedCount > 0 || removedEmptyAssistants > 0)
+            {
+                Logger.Info($"[API] Rule5 汇总: stripped={rule5StrippedCount} removedEmpty={removedEmptyAssistants} remaining={request.Messages.Count}");
+            }
 
             // ── 规则 6：移除孤立的 tool 消息（tool_call_id 找不到对应 assistant）──
             // 场景：ExploreAgent 内部 tool 结果泄漏到主 ContextManager，但对应 assistant(tool_calls) 未写入，
@@ -462,11 +479,37 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                             validToolCallIds.Add(tc.Id);
                 }
             }
+
+            // ── 🔍 诊断：遍历所有 tool 消息，记录哪些会被移除及原因 ──
+            int totalToolMsgs = 0;
+            var orphanDetails = new List<string>();
+            for (int i = 0; i < request.Messages.Count; i++)
+            {
+                var m = request.Messages[i];
+                if (m.Role != "tool") continue;
+                totalToolMsgs++;
+                if (string.IsNullOrEmpty(m.ToolCallId))
+                {
+                    orphanDetails.Add($"  [{i}] name={m.Name} — 缺少 tool_call_id");
+                    continue;
+                }
+                if (!validToolCallIds.Contains(m.ToolCallId))
+                {
+                    orphanDetails.Add($"  [{i}] name={m.Name} tcid={m.ToolCallId.Truncate(40)} — tool_call_id 无匹配 assistant");
+                }
+            }
+            if (orphanDetails.Count > 0)
+            {
+                Logger.Info($"[API] Rule6 诊断: totalToolMsgs={totalToolMsgs}, validToolCallIds={validToolCallIds.Count}, orphanCandidates={orphanDetails.Count}");
+                foreach (var detail in orphanDetails)
+                    Logger.Info(detail);
+            }
+
             int orphanToolCount = request.Messages.RemoveAll(m =>
                 m.Role == "tool" && !string.IsNullOrEmpty(m.ToolCallId) && !validToolCallIds.Contains(m.ToolCallId));
             if (orphanToolCount > 0)
             {
-                Logger.Warn($"[API] 移除 {orphanToolCount} 条孤立 tool 消息（tool_call_id 无匹配 assistant），避免 HTTP 400");
+                Logger.Warn($"[API] 移除 {orphanToolCount} 条孤立 tool 消息（tool_call_id 无匹配 assistant），避免 HTTP 400；剩余 {request.Messages.Count} 条");
             }
 
             // ── 预序列化请求体，供重试时复用 ──
@@ -476,8 +519,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             });
             var requestBodyBytes = Encoding.UTF8.GetBytes(requestJson);
 
-            // ── 记录请求元数据 ──
+            // ── 记录请求元数据 + 消息结构诊断 ──
+            int diagSys = request.Messages.Count(m => m.Role == "system");
+            int diagUser = request.Messages.Count(m => m.Role == "user");
+            int diagAst = request.Messages.Count(m => m.Role == "assistant");
+            int diagTool = request.Messages.Count(m => m.Role == "tool");
+            int diagAstTc = request.Messages.Count(m => m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Count > 0);
             Logger.Info($"[API] 发送请求: {requestBodyBytes.Length / 1024}KB, 消息数={request.Messages.Count}, 工具数={tools?.Count ?? 0}, maxTokens={maxTokens}");
+            Logger.Info($"[API] 消息结构(清洗后): system={diagSys}, user={diagUser}, assistant={diagAst}, tool={diagTool} (含工具调用={diagAstTc})");
 
             // ── 发送前 dump 请求体，确保 HTTP 400 等错误也能捕获 ──
             DumpRequestToDisk(requestJson, requestBodyBytes.Length,
