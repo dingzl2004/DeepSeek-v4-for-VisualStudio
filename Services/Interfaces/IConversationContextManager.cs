@@ -26,6 +26,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         int CacheWindowMaxTokens { get; set; }
         /// <summary>缓存窗口最大轮次数</summary>
         int CacheWindowMaxTurns { get; set; }
+        /// <summary>缓存窗口最大条目数（兜底保护，0 = 不限）</summary>
+        int CacheWindowMaxEntries { get; set; }
 
         // ── 系统/上下文设置 ──
         void SetSystemPrompt(string? prompt);

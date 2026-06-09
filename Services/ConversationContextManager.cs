@@ -118,6 +118,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// </summary>
         public int CacheWindowMaxTurns { get; set; } = 5;
 
+        /// <summary>
+        /// 缓存友好窗口：最多保留的消息条目数（兜底保护）。
+        /// 默认 80 条，防止单轮大量工具调用导致窗口失控。
+        /// 设为 0 不限条目数。
+        /// </summary>
+        public int CacheWindowMaxEntries { get; set; } = 80;
+
         /// <summary>获取当前对话轮次数（一个 user 消息 = 一轮）</summary>
         public int TurnCount => _entries.Count(e => e.Role == "user");
 
@@ -591,29 +598,36 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
         /// <summary>
         /// 查找缓存窗口的起始条目索引。
-        /// 从 _entries 末尾向前遍历，累计轮次和 token 数，
-        /// 直到达到 CacheWindowMaxTurns 或 CacheWindowMaxTokens 限制。
-        /// 返回窗口内第一个条目的索引（包含），0 表示全部条目都在窗口内。
+        /// 从 _entries 末尾向前遍历，累计轮次、token 数（UTF-8 字节估算）、条目数，
+        /// 直到达到任一限制。返回窗口内第一个条目的索引（包含），0 表示全部保留。
         /// </summary>
         private int FindCacheWindowStart()
         {
             int maxTurns = CacheWindowMaxTurns;
             int maxTokens = CacheWindowMaxTokens;
+            int maxEntries = CacheWindowMaxEntries;
 
-            // 禁用缓存窗口 → 返回 0（全部保留）
-            if (maxTurns <= 0 && maxTokens <= 0)
+            // 全部禁用 → 返回 0
+            if (maxTurns <= 0 && maxTokens <= 0 && maxEntries <= 0)
                 return 0;
 
             int turnCount = 0;
             int tokenSum = 0;
+            int entryCount = 0;
             int lastUserTurn = -1;
 
-            // 从后往前扫描，找到窗口边界
+            // 从后往前扫描
             for (int i = _entries.Count - 1; i >= 0; i--)
             {
                 var entry = _entries[i];
-                int entryTokens = EstimateTokens(entry.Content)
-                    + (entry.ReasoningContent != null ? EstimateTokens(entry.ReasoningContent) : 0);
+
+                // ── Token 估算：UTF-8 字节数 / 2（比 chars/4 更接近 API 实际值）──
+                int contentBytes = 0;
+                if (!string.IsNullOrEmpty(entry.Content))
+                    contentBytes = System.Text.Encoding.UTF8.GetByteCount(entry.Content);
+                if (!string.IsNullOrEmpty(entry.ReasoningContent))
+                    contentBytes += System.Text.Encoding.UTF8.GetByteCount(entry.ReasoningContent);
+                int entryTokens = Math.Max(1, contentBytes / 2);
 
                 // 检测到新的 user 消息 → 轮次+1
                 if (entry.Role == "user" && entry.TurnIndex > 0)
@@ -626,14 +640,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 }
 
                 tokenSum += entryTokens;
+                entryCount++;
 
                 // 检查是否超出窗口限制
                 bool turnLimitExceeded = maxTurns > 0 && turnCount >= maxTurns;
                 bool tokenLimitExceeded = maxTokens > 0 && tokenSum >= maxTokens;
+                bool entryLimitExceeded = maxEntries > 0 && entryCount >= maxEntries;
 
-                if (turnLimitExceeded || tokenLimitExceeded)
+                if (turnLimitExceeded || tokenLimitExceeded || entryLimitExceeded)
                 {
-                    // 当前条目是窗口内最后一个（最旧）→ 返回它的索引
                     return i;
                 }
             }
@@ -643,12 +658,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         }
 
         /// <summary>
-        /// 将指定索引之前的条目压缩为摘要（若有压缩服务）。
-        /// 压缩后条目从 _entries 中移除，摘要异步写入 _compressor。
+        /// 将指定索引之前的条目移出 _entries，可选压缩为摘要。
+        /// 即使没有压缩服务，也会移除旧条目以控制上下文大小。
         /// </summary>
         private void CompressEntriesBeforeWindow(int windowStartIdx)
         {
-            if (_compressor == null || windowStartIdx <= 0)
+            if (windowStartIdx <= 0)
                 return;
 
             var entriesToCompress = new List<ContextEntry>();
@@ -669,29 +684,33 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             int fromTurn = entriesToCompress.Where(e => e.TurnIndex > 0).Select(e => e.TurnIndex).DefaultIfEmpty(1).First();
             int toTurn = entriesToCompress.Where(e => e.TurnIndex > 0).Select(e => e.TurnIndex).DefaultIfEmpty(fromTurn).Last();
 
-            // 从 _entries 中移除
+            // ── 始终从 _entries 中移除（无论有无 compressor）──
             _entries.RemoveRange(0, windowStartIdx);
             _estimatedTokens -= removedTokens;
 
-            // 异步触发压缩（不阻塞 BuildApiMessages）
-            var capturedEntries = entriesToCompress;
-            _ = System.Threading.Tasks.Task.Run(async () =>
+            // ── 异步压缩（仅在有 compressor 时）──
+            if (_compressor != null)
             {
-                try
+                var capturedEntries = entriesToCompress;
+                _ = System.Threading.Tasks.Task.Run(async () =>
                 {
-                    await _compressor.CompressTurnsAsync(capturedEntries, fromTurn, toTurn);
-                    Logger.Info($"[CacheWindow] 压缩第 {fromTurn}-{toTurn} 轮: " +
-                        $"{removedTokens} → {_compressor.TotalCompressedTokens} tokens (摘要)");
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn($"[CacheWindow] 压缩失败: {ex.Message}");
-                }
-            });
+                    try
+                    {
+                        await _compressor.CompressTurnsAsync(capturedEntries, fromTurn, toTurn);
+                        Logger.Info($"[CacheWindow] 压缩第 {fromTurn}-{toTurn} 轮: " +
+                            $"{removedTokens} → {_compressor.TotalCompressedTokens} tokens (摘要)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"[CacheWindow] 压缩失败: {ex.Message}");
+                    }
+                });
+            }
 
             Logger.Info($"[CacheWindow] 裁剪 {entriesToCompress.Count} 条旧消息 " +
                 $"(第 {fromTurn}-{toTurn} 轮, {removedTokens} tokens)，" +
-                $"保留最近 {TurnCount} 轮在窗口内");
+                $"保留最近 {TurnCount} 轮在窗口内" +
+                (_compressor == null ? " (无压缩器，直接丢弃)" : ""));
         }
 
         /// <summary>
