@@ -497,16 +497,17 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// <summary>
         /// 构建上下文感知的消息列表，将 Agent 的 system prompt 与对话历史合并。
         /// 
-        /// ── 前缀缓存优化（v1.1.10）──
-        /// 消息顺序：
-        /// 1. 共享不可变前缀（messages[0]，永远不变 → DeepSeek Prefix Cache 永远命中）
-        /// 2. 压缩摘要（如果有）
-        /// 3. 对话历史（来自 ConversationContextManager）
-        /// 4. Agent 专属行为指令（systemPrompt，作为最后一条 system 消息注入）
-        /// 5. 当前用户消息
+        /// ── 前缀缓存优化（v1.1.11）──
+        /// 消息结构与 ConversationContextManager.BuildApiMessages() 完全对齐：
+        ///   messages[0] = SharedImmutablePrefix（跨 Agent 永远不变）
+        ///   messages[1] = fixedPrompt（会话级上下文，session 内不变）
+        ///   messages[2] = dynamicBlock（压缩摘要 + 搜索 + RAG + 记忆）
+        ///   messages[3..N] = 对话历史（包含 ReasonContent 和 tool 消息）
+        ///   messages[last-1] = Agent 专属行为指令（systemPrompt，跨 Agent 唯一变化点）
+        ///   messages[last] = 当前用户消息
         /// 
-        /// 将 Agent 专属指令放在末尾而非 messages[1]，确保对话历史的字节位置
-        /// 不受 Agent 切换影响，Handoff 后对话历史全部命中缓存。
+        /// 两条路径（BuildApiMessages vs BuildContextAwareMessages）产生完全一致
+        /// 的 messages[0..2] 前缀，确保 DeepSeek Prefix Cache 跨路径共享。
         /// </summary>
         /// <param name="systemPrompt">Agent 专属行为指令（不含共享前缀）</param>
         /// <param name="userPrompt">当前的用户消息/步骤描述</param>
@@ -535,52 +536,36 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             // ── 第1层：共享不可变前缀（永远放在 messages[0]，跨 Agent 完全相同）──
             messages.Add(new ChatApiMessage { Role = "system", Content = GetSharedImmutablePrefix() });
 
-            // ── 第2层：对话历史（来自 ConversationContextManager，相对稳定）──
-            // 使用 ContextManager 注入历史，而非 Context.ConversationHistory（后者不含 tool 消息和 reasoning 规则）
+            // ── 第2-4层：前缀 + 对话历史（来自 ConversationContextManager）──
+            // BuildApiMessagesRecentTurns 返回结构：[0]=SP, [1]=FP, [2]=DB, [3..]=entries
+            // 我们仅跳过重复的 [0]=SP（已在上面添加），保留 [1]=FP, [2]=DB, [3..]=entries
+            // 这样 messages[0..2] 与 BuildApiMessages() 字节完全一致 → 前缀缓存跨路径共享。
             var ctxManager = Context?.ContextManager;
             if (ctxManager != null && !ctxManager.IsEmpty && maxRecentTurns > 0)
             {
-                // ── 🔑 压缩摘要已由 BuildApiMessagesRecentTurns → BuildDynamicContextBlock 统一注入，
-                //    此处不再重复添加，避免同一条压缩摘要作为两条 system 消息出现，
-                //    浪费 token 且产生额外的不稳定前缀位置。
-
-                // 注入最近 N 轮的原始消息（保留 tool 调用链完整性）
                 var recentMessages = ctxManager.BuildApiMessagesRecentTurns(maxRecentTurns);
                 if (recentMessages.Count > 0)
                 {
-                    // ── 🔑 前缀缓存稳定（v1.1.10）：跳过 BuildApiMessagesRecentTurns 注入的
-                    //    所有前缀 system 消息（sharedPrefix + fixedPrompt + dynamicBlock），
-                    //    使 entries 直接从 messages[1] 开始。
-                    //    fixedPrompt 将在 entries 之后重新注入，确保会话上下文不丢失。
-                    int prefixSystemsSkipped = 0;
-                    const int maxPrefixSystems = 3; // sharedPrefix + fixedPrompt + dynamicBlock
+                    bool skippedFirstSystem = false;
                     foreach (var msg in recentMessages)
                     {
-                        if (msg.Role == "system" && prefixSystemsSkipped < maxPrefixSystems)
+                        // 仅跳过第一条 system 消息（SharedImmutablePrefix 重复），
+                        // 保留 fixedPrompt、dynamicBlock 和所有 entries 原样。
+                        if (!skippedFirstSystem && msg.Role == "system")
                         {
-                            prefixSystemsSkipped++;
+                            skippedFirstSystem = true;
                             continue;
                         }
                         messages.Add(msg);
                     }
                 }
-
-                // ── 重新注入 fixedPrompt（会话级上下文）到 entries 之后 ──
-                //    将其从固定前缀位置移到 entries 之后，消除因冻结时机不同导致的
-                //    前缀错位问题。与 agentPrompt 并列放在末尾。
-                string? fixedPrompt = ctxManager.GetFixedSystemPrompt();
-                if (!string.IsNullOrWhiteSpace(fixedPrompt))
-                {
-                    messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt });
-                }
             }
 
-            // ── 第3层：Agent 专属行为指令（放在历史之后、用户消息之前，作为最后一条 system 消息）──
-            //      此内容随 Agent 变化，但不影响 messages[0] 和对话历史的字节位置
+            // ── 第5层：Agent 专属行为指令（放在历史之后、用户消息之前，跨 Agent 唯一变化点）──
             if (!string.IsNullOrWhiteSpace(systemPrompt))
                 messages.Add(new ChatApiMessage { Role = "system", Content = systemPrompt });
 
-            // ── 第4层：当前用户消息（变化最大，放在最后）──
+            // ── 第6层：当前用户消息（变化最大，放在最后）──
             messages.Add(new ChatApiMessage { Role = "user", Content = userPrompt });
 
             return messages;
@@ -589,8 +574,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// <summary>
         /// 构建上下文感知的消息列表（支持注入额外的系统级上下文）。
         /// 
-        /// extraSystemMessages 插入在历史消息之后、Agent 专属指令之前，
-        /// Agent 专属指令之后是用户消息。确保 messages[0] 始终稳定可缓存。
+        /// extraSystemMessages 插入在 Agent 专属指令之后、用户消息之前。
+        /// 与主重载使用相同的统一前缀结构（messages[0..2] = SP + FP + DB），
+        /// 确保与 BuildApiMessages() 的 DeepSeek Prefix Cache 跨路径共享。
         /// </summary>
         protected List<ChatApiMessage> BuildContextAwareMessages(
             string systemPrompt,
