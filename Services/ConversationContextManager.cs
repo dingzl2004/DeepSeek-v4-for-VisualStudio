@@ -99,6 +99,25 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// <summary>当超过 Token 预算时自动压缩的最旧轮次数（此值在压缩模式下仅作用为最小保留轮次）</summary>
         public int AutoTrimTurns { get; set; } = 3;
 
+        // ── 缓存友好窗口（v1.1.10 稳定前缀窗口优化）──
+        //     将 messages 数组分为「固定前缀区」和「缓存窗口区」，
+        //     超出窗口的旧轮次自动压缩为摘要，确保 messages 数组大小稳定，
+        //     使 DeepSeek 服务端能快速检测公共前缀并落盘缓存。
+        //     参考：DeepSeek API 文档 — 公共前缀检测需要 2-3 次请求才能触发落盘
+
+        /// <summary>
+        /// 缓存友好窗口：消息列表超过此估算 token 数时自动裁剪旧轮次并压缩为摘要。
+        /// 默认 150K tokens（约 50KB JSON），确保 DeepSeek 前缀缓存可高效检测公共前缀。
+        /// 设为 0 禁用缓存窗口裁剪。
+        /// </summary>
+        public int CacheWindowMaxTokens { get; set; } = 150_000;
+
+        /// <summary>
+        /// 缓存友好窗口：最多保留的最近轮次数。
+        /// 默认 5 轮，配合 CacheWindowMaxTokens 使用（两者中限制更严格者生效）。
+        /// </summary>
+        public int CacheWindowMaxTurns { get; set; } = 5;
+
         /// <summary>获取当前对话轮次数（一个 user 消息 = 一轮）</summary>
         public int TurnCount => _entries.Count(e => e.Role == "user");
 
@@ -446,16 +465,25 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 }
             }
 
-            // ── 3. 动态上下文块：放在固定前缀之后、对话历史之前 ──
-            //     将压缩摘要、搜索、RAG、记忆合并为一条 system 消息。
+            // ── 3. 缓存窗口裁剪 + 动态上下文块 ──
+            //     先确定缓存窗口边界，将窗口外的旧轮次压缩为摘要（异步），
+            //     再构建动态块（包含压缩摘要、搜索、RAG、记忆）。
+            //     这样 messages[0..2] 结构保持稳定，只有窗口内的对话历史会变化。
+            int cacheWindowStart = FindCacheWindowStart();
+            if (cacheWindowStart > 0)
+            {
+                CompressEntriesBeforeWindow(cacheWindowStart);
+            }
+
             string? dynamicBlock = BuildDynamicContextBlock();
             if (!string.IsNullOrWhiteSpace(dynamicBlock))
             {
                 messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock });
             }
 
-            // ── 4. 遍历对话历史，正确构建消息 ──
-            //     历史位于固定前缀之后，使前缀缓存可连续命中所有不变的对话消息
+            // ── 4. 遍历缓存窗口内的对话历史，正确构建消息 ──
+            //     仅包含窗口内的条目（旧条目已在步骤 3 被压缩或丢弃），
+            //     确保 messages 数组大小稳定，使 DeepSeek 能检测公共前缀。
             foreach (var entry in _entries)
             {
                 // 跳过没有内容的条目（除非有 tool_calls）
@@ -562,6 +590,111 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         }
 
         /// <summary>
+        /// 查找缓存窗口的起始条目索引。
+        /// 从 _entries 末尾向前遍历，累计轮次和 token 数，
+        /// 直到达到 CacheWindowMaxTurns 或 CacheWindowMaxTokens 限制。
+        /// 返回窗口内第一个条目的索引（包含），0 表示全部条目都在窗口内。
+        /// </summary>
+        private int FindCacheWindowStart()
+        {
+            int maxTurns = CacheWindowMaxTurns;
+            int maxTokens = CacheWindowMaxTokens;
+
+            // 禁用缓存窗口 → 返回 0（全部保留）
+            if (maxTurns <= 0 && maxTokens <= 0)
+                return 0;
+
+            int turnCount = 0;
+            int tokenSum = 0;
+            int lastUserTurn = -1;
+
+            // 从后往前扫描，找到窗口边界
+            for (int i = _entries.Count - 1; i >= 0; i--)
+            {
+                var entry = _entries[i];
+                int entryTokens = EstimateTokens(entry.Content)
+                    + (entry.ReasoningContent != null ? EstimateTokens(entry.ReasoningContent) : 0);
+
+                // 检测到新的 user 消息 → 轮次+1
+                if (entry.Role == "user" && entry.TurnIndex > 0)
+                {
+                    if (lastUserTurn != entry.TurnIndex)
+                    {
+                        turnCount++;
+                        lastUserTurn = entry.TurnIndex;
+                    }
+                }
+
+                tokenSum += entryTokens;
+
+                // 检查是否超出窗口限制
+                bool turnLimitExceeded = maxTurns > 0 && turnCount >= maxTurns;
+                bool tokenLimitExceeded = maxTokens > 0 && tokenSum >= maxTokens;
+
+                if (turnLimitExceeded || tokenLimitExceeded)
+                {
+                    // 当前条目是窗口内最后一个（最旧）→ 返回它的索引
+                    return i;
+                }
+            }
+
+            // 所有条目都在窗口内
+            return 0;
+        }
+
+        /// <summary>
+        /// 将指定索引之前的条目压缩为摘要（若有压缩服务）。
+        /// 压缩后条目从 _entries 中移除，摘要异步写入 _compressor。
+        /// </summary>
+        private void CompressEntriesBeforeWindow(int windowStartIdx)
+        {
+            if (_compressor == null || windowStartIdx <= 0)
+                return;
+
+            var entriesToCompress = new List<ContextEntry>();
+            int removedTokens = 0;
+
+            for (int i = 0; i < windowStartIdx; i++)
+            {
+                var entry = _entries[i];
+                entriesToCompress.Add(entry);
+                removedTokens += EstimateTokens(entry.Content);
+                if (!string.IsNullOrEmpty(entry.ReasoningContent))
+                    removedTokens += EstimateTokens(entry.ReasoningContent);
+            }
+
+            if (entriesToCompress.Count == 0) return;
+
+            // 确定压缩的轮次范围
+            int fromTurn = entriesToCompress.Where(e => e.TurnIndex > 0).Select(e => e.TurnIndex).DefaultIfEmpty(1).First();
+            int toTurn = entriesToCompress.Where(e => e.TurnIndex > 0).Select(e => e.TurnIndex).DefaultIfEmpty(fromTurn).Last();
+
+            // 从 _entries 中移除
+            _entries.RemoveRange(0, windowStartIdx);
+            _estimatedTokens -= removedTokens;
+
+            // 异步触发压缩（不阻塞 BuildApiMessages）
+            var capturedEntries = entriesToCompress;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    await _compressor.CompressTurnsAsync(capturedEntries, fromTurn, toTurn);
+                    Logger.Info($"[CacheWindow] 压缩第 {fromTurn}-{toTurn} 轮: " +
+                        $"{removedTokens} → {_compressor.TotalCompressedTokens} tokens (摘要)");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"[CacheWindow] 压缩失败: {ex.Message}");
+                }
+            });
+
+            Logger.Info($"[CacheWindow] 裁剪 {entriesToCompress.Count} 条旧消息 " +
+                $"(第 {fromTurn}-{toTurn} 轮, {removedTokens} tokens)，" +
+                $"保留最近 {TurnCount} 轮在窗口内");
+        }
+
+        /// <summary>
         /// 构建仅包含最近 N 轮的 API 消息列表（用于 Agent 子调用）。
         /// 以 user 消息为轮次边界，保留完整的 tool 调用链。
         /// 前缀结构同 BuildApiMessages()：messages[0] = SharedImmutablePrefix，
@@ -589,6 +722,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     }
                 }
             }
+
+            // ── 缓存窗口：进一步限制 token 数，并压缩旧条目 ──
+            int tokenWindowStart = FindCacheWindowStart();
+            if (tokenWindowStart > startEntryIdx)
+                startEntryIdx = tokenWindowStart; // 使用更严格的窗口边界
+            if (startEntryIdx > 0)
+                CompressEntriesBeforeWindow(startEntryIdx);
 
             // 构建截断后的消息列表（前缀结构与 BuildApiMessages 一致）
             var messages = new List<ChatApiMessage>();
