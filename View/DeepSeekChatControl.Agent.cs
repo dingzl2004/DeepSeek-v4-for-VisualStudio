@@ -813,6 +813,65 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
+        /// 从 AI 原始响应中提取 JSON 数组。
+        /// DeepSeek JSON Output 模式下仍可能包裹在 markdown 代码块、标题或其他文本中。
+        /// </summary>
+        private static string ExtractJsonArray(string rawResponse)
+        {
+            if (string.IsNullOrWhiteSpace(rawResponse)) return string.Empty;
+
+            string text = rawResponse.Trim();
+
+            // 1) 去掉 markdown 代码块包裹 (```json ... ``` 或 ``` ... ```)
+            var codeBlockMatch = System.Text.RegularExpressions.Regex.Match(
+                text, @"```(?:json)?\s*\n?([\s\S]*?)\n?```",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (codeBlockMatch.Success)
+            {
+                text = codeBlockMatch.Groups[1].Value.Trim();
+            }
+
+            // 2) 尝试直接找到 JSON 数组（以 [ 开头，匹配到配对的 ]）
+            if (text.StartsWith("["))
+            {
+                int depth = 0;
+                int endIdx = -1;
+                for (int i = 0; i < text.Length; i++)
+                {
+                    if (text[i] == '[') depth++;
+                    else if (text[i] == ']') { depth--; if (depth == 0) { endIdx = i; break; } }
+                }
+                if (endIdx > 0)
+                    return text.Substring(0, endIdx + 1);
+            }
+
+            // 3) 搜索文本中第一个出现的 JSON 数组
+            var arrayMatch = System.Text.RegularExpressions.Regex.Match(
+                text, @"\[\s*\{[\s\S]*?\}\s*\]|\[\s*\]",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (arrayMatch.Success)
+                return arrayMatch.Value;
+
+            // 4) 回退：去掉常见的非 JSON 前缀（# 标题、- 列表、普通文本行）
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text, @"^(?:#+?\s+.*?\n|(?:\w[\w\s]*?[：:]\s*?\n))*", "",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
+            text = text.Trim();
+            if (text.StartsWith("["))
+            {
+                int depth = 0, endIdx = -1;
+                for (int i = 0; i < text.Length; i++)
+                {
+                    if (text[i] == '[') depth++;
+                    else if (text[i] == ']') { depth--; if (depth == 0) { endIdx = i; break; } }
+                }
+                if (endIdx > 0) return text.Substring(0, endIdx + 1);
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
         /// 在一次问答结束后，自动判断是否需要将关键信息记录到持久化记忆。
         /// 使用轻量级非流式 API 调用，解析 AI 返回的记忆操作指令并执行。
         /// </summary>
@@ -823,7 +882,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
             try
             {
                 // ── 构建轻量级记忆判断提示 ──
-                var systemPrompt = "你是一个记忆管理助手。你的任务是：根据一轮对话（用户问题 + AI回答），判断是否有值得持久化记忆的信息。\n\n"
+                // 遵循 DeepSeek JSON Output 规范：prompt 中必须含 "json" 字样 + JSON 样例
+                var systemPrompt = "你是一个记忆管理助手。根据一轮对话（用户问题 + AI回答），判断是否有值得持久化记忆的信息，并以 JSON 格式输出。\n\n"
                     + "记忆作用域：\n"
                     + "- user — 用户记忆：跨所有工作区持久化，存储用户偏好、编码习惯、常用命令等\n"
                     + "- session — 会话记忆：当前对话内有效，存储临时上下文和进行中笔记\n"
@@ -833,16 +893,14 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     + "- 发现项目特定的构建命令、架构约定 → 记录到 repo 作用域\n"
                     + "- 对话中做出了重要的技术决策 → 记录到 repo 作用域\n"
                     + "- 用户纠正了 AI 的错误 → 记录到 user 作用域\n"
-                    + "- 如果是普通问答、代码解释、简单修改请求 → 不需要记录\n\n"
-                    + "输出格式：只返回 JSON 数组。如果需要记录，每个元素包含 scope（user/session/repo）、path（文件名如 notes.md）、content（markdown 内容摘要，简洁精炼）。"
-                    + "如果不需要记录，返回空数组 []。\n\n"
-                    + "示例输出：\n"
+                    + "- 如果是普通问答、代码解释、简单修改请求 → 输出空数组 []\n\n"
+                    + "JSON 输出格式（严格遵守，不要包含任何其他文本）：\n"
+                    + "需要记录时输出 json 数组，每个元素含 scope/user/session/repo、path/文件名.md、content/markdown内容：\n"
                     + "[{\"scope\":\"user\",\"path\":\"preferences.md\",\"content\":\"用户偏好使用 var 而非显式类型声明\"}]\n"
-                    + "或\n"
-                    + "[]\n\n"
-                    + "只返回 JSON，不要包含任何其他文本。";
+                    + "不需要记录时输出：\n"
+                    + "[]";
 
-                var userPrompt = $"## 用户消息\n{userMessage.Truncate(2000)}\n\n## AI 回答摘要\n{assistantResponse.Truncate(2000)}\n\n请判断是否有值得记录的信息。";
+                var userPrompt = $"## 用户消息\n{userMessage.Truncate(2000)}\n\n## AI 回答摘要\n{assistantResponse.Truncate(2000)}\n\n请以 JSON 数组格式输出判断结果。";
 
                 var messages = new List<ChatApiMessage>
                 {
@@ -858,18 +916,15 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     return;
                 }
 
-                // ── 解析 JSON ──
-                string json = rawResponse.Trim();
-                // 清理可能的 markdown 代码块包裹
-                if (json.StartsWith("```"))
+                // ── 解析 JSON（DeepSeek JSON Output 模式下仍可能包裹 markdown 或前缀文本）──
+                string json = ExtractJsonArray(rawResponse);
+                if (string.IsNullOrWhiteSpace(json))
                 {
-                    int start = json.IndexOf('\n');
-                    int end = json.LastIndexOf("```");
-                    if (start >= 0 && end > start)
-                        json = json.Substring(start + 1, end - start - 1).Trim();
+                    Logger.Info("[Memory] 自动记忆判断：无需记录（未找到有效 JSON 数组）");
+                    return;
                 }
 
-                if (json == "[]" || string.IsNullOrWhiteSpace(json))
+                if (json == "[]")
                 {
                     Logger.Info("[Memory] 自动记忆判断：无需记录");
                     return;

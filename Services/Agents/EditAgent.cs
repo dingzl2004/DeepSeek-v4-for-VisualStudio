@@ -758,16 +758,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             var operationType = EditOperationType.ApplyPatch;
 
             // ── v1.1.10: 路径A — 工具编辑（AI 在工具循环中直接修改了文件）──
+            // 工具编辑后需在 originalContents 中记录"原始"状态，防止文本路径重复处理时 diff 归零。
+            var toolHandledFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (hasToolEdits)
             {
                 await CollectToolMadeEditsAsync(toolMadeEdits, plan, context, workspaceRoot,
-                    originalContents, appliedResults, ct);
+                    originalContents, appliedResults, ct, toolHandledFiles);
 
                 // ── 如果文本回复中也有编辑格式，作为补充处理（但排除已通过工具编辑的文件）──
                 if (!string.IsNullOrWhiteSpace(result) && HasAnyValidEditFormat(result))
                 {
                     AddLog("INFO", "[EditAgent] 工具编辑之外还检测到文本编辑格式，作为补充处理");
-                    // 继续走下面的文本格式解析（合并模式）
+                    // 继续走下面的文本格式解析（合并模式），但跳过 toolHandledFiles 中的文件
                 }
                 else
                 {
@@ -780,6 +782,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             // ── 路径B — 文本格式编辑（AI 通过文本输出编辑块）──
             if (!string.IsNullOrWhiteSpace(result))
             {
+                // ── 如果工具路径已处理过某些文件，跳过文本路径的重复处理 ──
+                if (toolHandledFiles.Count > 0)
+                {
+                    AddLog("INFO", $"[EditAgent] 跳过 {toolHandledFiles.Count} 个已由工具编辑的文件: {string.Join(", ", toolHandledFiles.Select(Path.GetFileName))}");
+                }
+
                 // ── 检测编辑操作类型 ──
                 operationType = DetectOperationType(result);
 
@@ -1832,7 +1840,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             string workspaceRoot,
             Dictionary<string, string> originalContents,
             List<EditApplyResult> appliedResults,
-            CancellationToken ct)
+            CancellationToken ct,
+            HashSet<string>? toolHandledFiles = null)
         {
             foreach (var (filePath, toolName) in toolEdits)
             {
@@ -1849,6 +1858,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                 bool isNewFile = toolName == "create_file" && !File.Exists(resolvedPath);
                 bool fileExists = File.Exists(resolvedPath);
+
+                // ── 记录已处理的文件（供文本路径去重）──
+                toolHandledFiles?.Add(resolvedPath);
+
+                // ── 为新文件设置空原始内容（防止文本路径的 diff 归零）──
+                if (isNewFile)
+                {
+                    originalContents[resolvedPath] = string.Empty;
+                }
 
                 if (toolName == "delete_file")
                 {
@@ -1917,7 +1935,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         }
                         catch { added = 1; }
                     }
-                    else { added = isNewFile ? 1 : 1; }
+                    else if (fileExists)
+                    {
+                        // 工具修改了已存在的文件但没有原始内容（原始未保存），读取最终内容统计行数
+                        try
+                        {
+                            string content = await Task.Run(() => File.ReadAllText(resolvedPath), ct);
+                            added = CountLines(content);
+                        }
+                        catch { added = 1; }
+                    }
+                    else
+                    {
+                        added = 1; // 文件被删除或其他异常情况
+                    }
 
                     plan.ChangedFiles.Add(new FileChangeSummary
                     {
