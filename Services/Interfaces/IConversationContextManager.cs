@@ -44,6 +44,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         /// </summary>
         void FreezeSystemPrompt();
 
+        /// <summary>
+        /// 获取已冻结的系统提示词（null = 尚未冻结）。
+        /// </summary>
+        string? GetFixedSystemPrompt();
+
         // ── 消息管理 ──
         void AddUserMessage(string content);
         Task AddUserMessageAsync(string content, CancellationToken cancellationToken = default);

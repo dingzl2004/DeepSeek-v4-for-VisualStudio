@@ -536,8 +536,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     // ── 🔑 前缀缓存稳定（v1.1.10）：跳过 BuildApiMessagesRecentTurns 注入的
                     //    所有前缀 system 消息（sharedPrefix + fixedPrompt + dynamicBlock），
                     //    使 entries 直接从 messages[1] 开始。
-                    //    这确保重建后的消息结构与工具循环中累积的消息结构完全一致，
-                    //    避免 Agent Handoff 后因 fixedPrompt 冻结时机不同导致前缀错位。
+                    //    fixedPrompt 将在 entries 之后重新注入，确保会话上下文不丢失。
                     int prefixSystemsSkipped = 0;
                     const int maxPrefixSystems = 3; // sharedPrefix + fixedPrompt + dynamicBlock
                     foreach (var msg in recentMessages)
@@ -545,10 +544,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         if (msg.Role == "system" && prefixSystemsSkipped < maxPrefixSystems)
                         {
                             prefixSystemsSkipped++;
-                            continue; // 跳过前缀 system 消息
+                            continue;
                         }
                         messages.Add(msg);
                     }
+                }
+
+                // ── 重新注入 fixedPrompt（会话级上下文）到 entries 之后 ──
+                //    将其从固定前缀位置移到 entries 之后，消除因冻结时机不同导致的
+                //    前缀错位问题。与 agentPrompt 并列放在末尾。
+                string? fixedPrompt = ctxManager.GetFixedSystemPrompt();
+                if (!string.IsNullOrWhiteSpace(fixedPrompt))
+                {
+                    messages.Add(new ChatApiMessage { Role = "system", Content = fixedPrompt });
                 }
             }
 
