@@ -364,6 +364,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 AutoCompressIfNeeded();
             else
                 AutoTrimIfNeeded();
+
+            // ── 🔑 v1.1.11：冻结动态上下文块，确保同轮次内后续API调用
+            //     messages[2] 内容不变 → DeepSeek前缀缓存可持续命中。──
+            _cachedDynamicBlock = BuildDynamicContextBlock();
         }
 
         /// <summary>
@@ -388,6 +392,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 await AutoCompressIfNeededAsync(cancellationToken);
             else
                 AutoTrimIfNeeded();
+
+            // ── 🔑 v1.1.11：冻结动态上下文块（同AddUserMessage）。──
+            _cachedDynamicBlock = BuildDynamicContextBlock();
         }
 
         /// <summary>
@@ -854,7 +861,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
             // ── 3. 动态上下文块（固定位置，在历史之前）──
             //     🔑 v1.1.11：始终占据固定位置（即使为空），避免压缩触发前后的位置位移。
-            string? dynamicBlock = BuildDynamicContextBlock();
+            //     使用缓存版本（AddUserMessage时冻结），确保同轮次内内容不变。
+            string? dynamicBlock = _cachedDynamicBlock ?? BuildDynamicContextBlock();
             messages.Add(new ChatApiMessage { Role = "system", Content = dynamicBlock ?? string.Empty });
 
             // ── 4. 从 startEntryIdx 开始构建对话历史 ──
