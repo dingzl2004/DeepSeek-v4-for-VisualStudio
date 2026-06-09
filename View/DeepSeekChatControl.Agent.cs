@@ -605,6 +605,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         {
                             cacheFooter = ChatHtmlService.BuildCacheHitFooterHtml(
                                 delta.Hit, delta.Miss, delta.Prompt, delta.Completion, roundCount: 1);
+                            // ── 持久化到 ChatMessage，重启后 RebuildMessagesHtml 可恢复显示 ──
+                            lock (_lock) { if (_agentStreamingMsgIndex >= 0 && _agentStreamingMsgIndex < _messages.Count) _messages[_agentStreamingMsgIndex].CacheFooterHtml = cacheFooter; }
                         }
                     }
                     catch { }
@@ -670,6 +672,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         {
                             cacheFooter = ChatHtmlService.BuildCacheHitFooterHtml(
                                 delta.Hit, delta.Miss, delta.Prompt, delta.Completion, roundCount: 1);
+                            lock (_lock) { if (_agentStreamingMsgIndex >= 0 && _agentStreamingMsgIndex < _messages.Count) _messages[_agentStreamingMsgIndex].CacheFooterHtml = cacheFooter; }
                         }
                     }
                     catch { }
@@ -718,6 +721,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         {
                             cacheFooter = ChatHtmlService.BuildCacheHitFooterHtml(
                                 delta.Hit, delta.Miss, delta.Prompt, delta.Completion, roundCount: 1);
+                            lock (_lock) { if (_agentStreamingMsgIndex >= 0 && _agentStreamingMsgIndex < _messages.Count) _messages[_agentStreamingMsgIndex].CacheFooterHtml = cacheFooter; }
                         }
                     }
                     catch { }

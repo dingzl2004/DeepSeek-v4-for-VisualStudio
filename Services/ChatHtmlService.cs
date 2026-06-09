@@ -741,6 +741,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             sb.Append(retryBtnHtml);
             sb.Append(copyBtnHtml);
             sb.Append("</div>");
+            // ── 缓存命中率统计卡片（实时流式发送 + 重启后从 ChatMessage.CacheFooterHtml 恢复）──
+            if (!string.IsNullOrEmpty(msg.CacheFooterHtml))
+            {
+                sb.Append(msg.CacheFooterHtml);
+            }
             sb.Append("</div>");
         }
 

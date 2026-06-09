@@ -449,6 +449,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
                             {
                                 try { msg.HandoffJson = JsonSerializer.Serialize(_pendingHandoff, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }); } catch { }
                             }
+                            // ── 持久化缓存统计 HTML，重启后可恢复显示 ──
+                            if (!string.IsNullOrEmpty(cacheFooter))
+                                msg.CacheFooterHtml = cacheFooter;
                         }
                     }
 
@@ -1338,6 +1341,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     {
                         cacheFooterHtml = ChatHtmlService.BuildCacheHitFooterHtml(
                             delta.Hit, delta.Miss, delta.Prompt, delta.Completion, roundCount: 1);
+                        // ── 持久化到 ChatMessage，重启后可恢复显示 ──
+                        lock (_lock) { if (newAssistantIdx >= 0 && newAssistantIdx < _messages.Count) _messages[newAssistantIdx].CacheFooterHtml = cacheFooterHtml; }
                     }
                 }
 

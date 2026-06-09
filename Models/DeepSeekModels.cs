@@ -449,6 +449,14 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         public string? PlanJson { get; set; }
 
         /// <summary>
+        /// 缓存命中率统计卡片的 HTML（由 BuildCacheHitFooterHtml 生成）。
+        /// 重启后 RebuildMessagesHtml 将其注入到消息末尾，确保缓存统计在会话恢复后仍可见。
+        /// null 或空字符串表示无缓存统计（如用户消息、纯文本回复等）。
+        /// </summary>
+        [DataMember]
+        public string? CacheFooterHtml { get; set; }
+
+        /// <summary>
         /// Agent Handoff 的 JSON 序列化数据。
         /// 用于会话切换后重建"开始执行"按钮，null 表示无待处理 Handoff。
         /// </summary>
