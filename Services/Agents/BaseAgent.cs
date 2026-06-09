@@ -787,6 +787,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             contentBuilder.Append("\n\n> ⏏️ 操作已被取消。");
                         streamSuccess = true; // 不视为失败，正常退出
                     }
+                    catch (ObjectDisposedException) when (!ct.IsCancellationRequested && streamAttempt < maxStreamAttempts - 1)
+                    {
+                        // SSE 读取超时（v1.1.10）：120s 无数据 → 流被 Dispose → ReadLineAsync 抛 ObjectDisposedException
+                        streamAttempt++;
+                        savedPartialContent = contentBuilder.ToString();
+                        savedPartialReasoning = reasoningBuilder.ToString();
+                        double backoffSec = Math.Pow(2, streamAttempt);
+                        Logger.Warn($"[Agent:{Definition.Name}] SSE 流读取超时 (尝试 {streamAttempt}/{maxStreamAttempts})，已收到 {savedPartialContent.Length} 字符，{backoffSec}s 后恢复…");
+                        contentBuilder.Clear();
+                        reasoningBuilder.Clear();
+                        toolCallAccumulator.Clear();
+                        await Task.Delay(TimeSpan.FromSeconds(backoffSec), ct);
+                    }
                     catch (IOException) when (ct.IsCancellationRequested)
                     {
                         // 用户取消导致的 IO 异常，不重试
@@ -794,6 +807,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         if (contentBuilder.Length == 0)
                             contentBuilder.Append("\n\n> ⏏️ 操作已被取消。");
                         streamSuccess = true;
+                    }
+                    catch (IOException) when (!ct.IsCancellationRequested && streamAttempt < maxStreamAttempts - 1)
+                    {
+                        // 网络错误导致的 IO 异常（非用户取消），尝试重试
+                        streamAttempt++;
+                        savedPartialContent = contentBuilder.ToString();
+                        savedPartialReasoning = reasoningBuilder.ToString();
+                        double backoffSec = Math.Pow(2, streamAttempt);
+                        Logger.Warn($"[Agent:{Definition.Name}] 流网络错误 (尝试 {streamAttempt}/{maxStreamAttempts})，已收到 {savedPartialContent.Length} 字符，{backoffSec}s 后恢复…");
+                        contentBuilder.Clear();
+                        reasoningBuilder.Clear();
+                        toolCallAccumulator.Clear();
+                        await Task.Delay(TimeSpan.FromSeconds(backoffSec), ct);
                     }
                     catch (OperationCanceledException)
                     {

@@ -670,20 +670,31 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 }
             }
 
-            // ── 取消令牌注册：当 ct 触发时释放底层流，使 ReadLineAsync 立即抛出异常 ──
-            // .NET Framework 4.7.2 的 ReadLineAsync 不接受 CancellationToken，
-            // 通过释放流来实现同样的中断效果。释放 SslStream 可能抛出
-            // ObjectDisposedException（而非 OperationCanceledException），
-            // 调用方应在 foreach 外层捕获 ObjectDisposedException 并检查取消状态。
-            string? line;
-            using (cancellationToken.Register(() =>
+            // ── SSE 流读取超时保护（v1.1.10）──
+            // 问题：.NET Framework 4.7.2 的 ReadLineAsync 不接受 CancellationToken，
+            // 当网络静默断开（TCP 无 RST/FIN）时 ReadLineAsync 会永久挂起。
+            // 修复：创建 linked CTS，每收到一条数据重置超时计时器，
+            // 超时后 Dispose 底层流使 ReadLineAsync 抛出 ObjectDisposedException，
+            // 调用方将其转为可重试异常。
+            // 用户取消 (ct) 仍正常传递 → 释放流 → 退出循环。
+            const int sseReadTimeoutSeconds = 120; // 2 分钟无数据视为断连
+            using var readTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readTimeoutCts.CancelAfter(TimeSpan.FromSeconds(sseReadTimeoutSeconds));
+
+            // 注册：任一取消源触发时释放流，打断 ReadLineAsync
+            using (readTimeoutCts.Token.Register(() =>
             {
                 try { stream.Dispose(); } catch { }
             }))
             {
+            string? line;
             while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
             {
+                // 用户主动取消立即抛出
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // 每次成功读到数据，重置无数据超时计时器
+                readTimeoutCts.CancelAfter(TimeSpan.FromSeconds(sseReadTimeoutSeconds));
 
                 if (string.IsNullOrEmpty(line) || !line.StartsWith("data: "))
                     continue;

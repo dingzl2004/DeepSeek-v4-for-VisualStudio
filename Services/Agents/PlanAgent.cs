@@ -292,9 +292,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         }
 
         /// <summary>
-        /// 构建统一探索 prompt：指导 AI 先浏览项目结构，再深入探索关键区域。
-        /// 通过 runSubagent 工具委托 ExploreAgent 进行代码库探索，
-        /// 所有探索结果作为 tool 消息保留在对话历史中。
+        /// 构建统一探索 prompt：AI 自主判断是否需要探索代码库。
+        /// 
+        /// 如果用户消息、文件上下文、对话历史中已包含足够信息，AI 应直接回复 DONE 跳过探索。
+        /// 如需探索，通过 runSubagent 工具委托 ExploreAgent，所有探索结果作为 tool 消息保留在对话历史中。
         /// </summary>
         private static string BuildUnifiedDiscoveryPrompt(
             string userMessage, AgentContext context, string? structureCache)
@@ -308,6 +309,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             sb.AppendLine(userMessage);
             sb.AppendLine();
 
+            // ── 用户提供的文件上下文（如果存在，AI 可能无需探索）──
+            if (!string.IsNullOrEmpty(context.FileContext))
+            {
+                sb.AppendLine(L["agent.plan.fileContextHeader"]);
+                sb.AppendLine(context.FileContext);
+                sb.AppendLine();
+            }
+
+            // ── 项目结构缓存或探索指引 ──
             if (!string.IsNullOrEmpty(structureCache))
             {
                 sb.AppendLine(L["agent.plan.discoveryStructureCached"]);
@@ -320,6 +330,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 sb.AppendLine(L["agent.plan.discoveryFirstExplore"]);
             }
 
+            // ── 上下文充足判定 ──
+            bool hasSufficientContext = !string.IsNullOrEmpty(context.FileContext)
+                || !string.IsNullOrEmpty(structureCache);
+            if (hasSufficientContext)
+            {
+                sb.AppendLine();
+                sb.AppendLine(L["agent.plan.discoveryNoExploreNeeded"]);
+            }
+
             if (!string.IsNullOrEmpty(context.SolutionPath))
             {
                 sb.AppendLine();
@@ -329,14 +348,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             sb.AppendLine();
             sb.AppendLine(L["agent.plan.discoveryUnifiedTail"]);
 
-            // ── 并行子代理策略 ──
+            // ── 并行子代理策略（仅探索时相关）──
             sb.AppendLine();
-            sb.AppendLine("## 并行探索策略");
+            sb.AppendLine("## 探索策略（仅在需要探索时参考）");
             sb.AppendLine("- 需要探索多个独立区域时，在一次回复中同时调用多个 runSubagent（最多 3 个并行）");
             sb.AppendLine("- **为每个子代理分配不同的探索区域**，避免重复探索相同的文件或目录");
             sb.AppendLine("- 例如：子代理 1 探索存储层，子代理 2 探索执行引擎，子代理 3 探索索引结构");
             sb.AppendLine("- 如果文件已被之前子代理读取（cached=\"true\"），直接使用缓存内容，无需重复读取");
             sb.AppendLine("- 探索完成后汇总所有子代理的发现，形成完整的分析报告");
+            sb.AppendLine();
+            sb.AppendLine("## ⚠️ 关键规则");
+            sb.AppendLine("- 如果用户消息 + 已有上下文已足够制定实现计划 → **直接回复 DONE，不调用任何工具**");
+            sb.AppendLine("- 如果缺少关键信息（项目结构、相关代码等）→ 使用 runSubagent 探索后再回复 DONE");
+            sb.AppendLine("- DONE 必须是纯文本，不要包裹在 markdown、代码块或 JSON 中");
 
             return sb.ToString();
         }
