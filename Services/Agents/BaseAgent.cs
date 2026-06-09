@@ -2247,12 +2247,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             {
                 field.LogEntryAdded -= OnExploreLog;
                 field.FileChangeNotified -= OnExploreFileChange;
+                field.PermissionRequested -= OnExplorePermissionRequested;
+                field.QuestionsRequested -= OnExploreQuestionsRequested;
             }
             field = exploreAgent;
             if (field != null)
             {
                 field.LogEntryAdded += OnExploreLog;
                 field.FileChangeNotified += OnExploreFileChange;
+                field.PermissionRequested += OnExplorePermissionRequested;
+                field.QuestionsRequested += OnExploreQuestionsRequested;
             }
         }
 
@@ -2276,6 +2280,25 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 ExploreAgent.LogEntryAdded -= OnExploreLog;
                 ExploreAgent.LogEntryAdded += OnExploreLog;
             }
+        }
+
+        /// <summary>
+        /// 转发 ExploreAgent 的权限请求到父 Agent（v1.1.10 修复）。
+        /// 子代理执行 git/终端等操作需要审批时，弹窗需通过父 Agent 的事件链到达 UI。
+        /// </summary>
+        private void OnExplorePermissionRequested(AgentPermissionRequest request)
+        {
+            PermissionRequested?.Invoke(request);
+            AddLog("INFO", $"[Explore→{Definition.Name}] 转发权限请求: {request.Title}");
+        }
+
+        /// <summary>
+        /// 转发 ExploreAgent 的提问请求到父 Agent（v1.1.10 修复）。
+        /// </summary>
+        private void OnExploreQuestionsRequested(AgentQuestionRequest request)
+        {
+            QuestionsRequested?.Invoke(request);
+            AddLog("INFO", $"[Explore→{Definition.Name}] 转发提问请求: {request.Questions.Count} 个问题");
         }
 
         private void OnExploreFileChange(AgentFileChangeEventArgs args)
