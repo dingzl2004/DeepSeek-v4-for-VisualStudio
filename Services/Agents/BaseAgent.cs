@@ -515,6 +515,21 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         protected List<ChatApiMessage> BuildContextAwareMessages(
             string systemPrompt, string userPrompt, int maxRecentTurns = int.MaxValue)
         {
+            // ── 🔑 Handoff 消息复用（v1.1.10）：若源 Agent 传递了工具循环消息列表，
+            //    直接复用作为前缀，不再从 ContextManager 重建。
+            //    这确保 Handoff 前后消息结构完全一致，DeepSeek Prefix Cache 可直接命中。
+            List<ChatApiMessage>? forwarded = Context?.ForwardedMessages;
+            if (forwarded != null && forwarded.Count > 0)
+            {
+                Context!.ForwardedMessages = null; // 消费后清空，防止下次误用
+                var result = new List<ChatApiMessage>(forwarded);
+                // ── 追加目标 Agent 专属指令和用户消息 ──
+                if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    result.Add(new ChatApiMessage { Role = "system", Content = systemPrompt });
+                result.Add(new ChatApiMessage { Role = "user", Content = userPrompt });
+                return result;
+            }
+
             var messages = new List<ChatApiMessage>();
 
             // ── 第1层：共享不可变前缀（永远放在 messages[0]，跨 Agent 完全相同）──
@@ -1077,6 +1092,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     if (PendingHandoffRequest != null)
                     {
                         Logger.Info($"[Agent:{Definition.Name}] 🔄 检测到移交请求 → {PendingHandoffRequest.TargetAgent}，终止工具循环");
+                        // ── 🔑 保存工具循环消息列表，供 Handoff 目标 Agent 复用前缀 ──
+                        if (Context != null)
+                        {
+                            Context.ForwardedMessages = new List<ChatApiMessage>(messages);
+                        }
                         if (contentBuilder.Length > 0)
                             contentBuilder.Append("\n\n> 🔄 任务已移交给 " + PendingHandoffRequest.TargetAgent + " Agent...");
                         break;

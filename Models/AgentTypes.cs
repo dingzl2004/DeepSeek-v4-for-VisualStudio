@@ -198,6 +198,16 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         public string? CodeMemory { get; set; }
 
         /// <summary>
+        /// 🔑 Handoff 时源 Agent 的最终工具循环消息列表（v1.1.10 缓存优化）。
+        /// 设置后，目标 Agent 的 BuildContextAwareMessages 将复用此列表作为前缀，
+        /// 而非从 ContextManager 重建，确保 Handoff 前后消息结构一致，
+        /// DeepSeek Prefix Cache 可直接命中。
+        /// Handoff 完成后由目标 Agent 首次 BuildContextAwareMessages 消费并清空。
+        /// </summary>
+        [JsonIgnore]
+        public List<ChatApiMessage>? ForwardedMessages { get; set; }
+
+        /// <summary>
         /// 实时推理流回调。Agent 内部每收到一个 thinking chunk 时调用，
         /// 供 UI 层实时流式更新思考面板。
         /// </summary>
