@@ -266,9 +266,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         }
 
         /// <summary>
-        /// 应用单个 Patch 到文件（基于 Chunk 重建）。
+        /// 应用单个 Patch 到文件（基于 Chunk 重建）。可以静态调用，无需实例。
         /// </summary>
-        private EditApplyResult ApplySinglePatch(
+        internal static EditApplyResult ApplySinglePatch(
             PatchOperation patch, string filePath, string fileContent)
         {
             var result = new EditApplyResult
@@ -483,7 +483,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// <summary>
         /// 将 PatchHunk 转换为 FileChunk + 上下文行数组。
         /// </summary>
-        private static (FileChunk? chunk, string[] contextLines) HunkToChunk(PatchHunk hunk)
+        internal static (FileChunk? chunk, string[] contextLines) HunkToChunk(PatchHunk hunk)
         {
             var contextLines = new List<string>();
             var delLines = new List<string>();
@@ -555,7 +555,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// </summary>
         /// <param name="chunk">已匹配定位的 FileChunk</param>
         /// <param name="fileLines">原始文件行数组</param>
-        private static void TrimTrailingDuplicateClosingTokens(FileChunk chunk, string[] fileLines)
+        internal static void TrimTrailingDuplicateClosingTokens(FileChunk chunk, string[] fileLines)
         {
             if (chunk.InsLines.Count == 0)
                 return;
@@ -593,7 +593,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             }
         }
 
-        private static bool IsClosingToken(string line)
+        internal static bool IsClosingToken(string line)
         {
             string trimmed = line.Trim();
             return trimmed switch
@@ -609,7 +609,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// 检查 @@ 标记文本是否出现在匹配位置附近（±MarkerSearchWindow 行内）。
         /// 用于验证上下文匹配结果是否与标记一致，防止在错误位置匹配。
         /// </summary>
-        private static bool IsMarkerNearPosition(
+        internal static bool IsMarkerNearPosition(
             string[] fileLines, List<string> contextMarkers,
             int matchedLine, int contextLength, int searchWindow = 10)
         {
@@ -643,7 +643,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// 合并为一组处理 — 取最大删除行数、拼接所有插入行。这解决了 AI 生成多个
         /// Hunk 时因共享上下文行导致的坐标重叠问题。
         /// </summary>
-        private static string ReconstructFile(string[] originalLines, List<FileChunk> chunks)
+        internal static string ReconstructFile(string[] originalLines, List<FileChunk> chunks)
         {
             if (chunks.Count == 0)
                 return string.Join("\n", originalLines);
@@ -728,7 +728,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// <summary>
         /// 统计字符串数组尾部的空行数。
         /// </summary>
-        private static int CountTrailingEmptyLines(IList<string> lines)
+        internal static int CountTrailingEmptyLines(IList<string> lines)
         {
             int count = 0;
             for (int i = lines.Count - 1; i >= 0; i--)
@@ -750,7 +750,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// 缩进适配：将 AI 输出的缩进调整为与目标文件一致。
         /// 参考: parser.ts computeIndentLevel2 + transformIndentation + additionalIndentation
         /// </summary>
-        private static void AdaptChunkIndentation(
+        internal static void AdaptChunkIndentation(
             FileChunk chunk, string[] contextLines, string[] fileLines, int matchedLine)
         {
             if (chunk.InsLines.Count == 0 || contextLines.Length == 0 || matchedLine >= fileLines.Length)
@@ -783,7 +783,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// <summary>
         /// 计算行的缩进级别（空格数，制表符按4空格计）。
         /// </summary>
-        private static int GetIndentLevel(string line)
+        internal static int GetIndentLevel(string line)
         {
             int level = 0;
             foreach (char c in line)
@@ -798,7 +798,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// <summary>
         /// 推断行的缩进字符（优先制表符，否则空格）。
         /// </summary>
-        private static string GetIndentChar(string line)
+        internal static string GetIndentChar(string line)
         {
             if (line.Length > 0 && line[0] == '\t') return "\t";
             return " ";
@@ -808,7 +808,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
 
         #region Add / Delete / Move
 
-        private static EditApplyResult ApplyCreateFromPatch(PatchOperation patch, string filePath)
+        internal static EditApplyResult ApplyCreateFromPatch(PatchOperation patch, string filePath)
         {
             var result = new EditApplyResult
             {
@@ -831,7 +831,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             return result;
         }
 
-        private static EditApplyResult ApplyDeleteFile(string filePath)
+        internal static EditApplyResult ApplyDeleteFile(string filePath)
         {
             var result = new EditApplyResult
             {
@@ -861,7 +861,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             return result;
         }
 
-        private static EditApplyResult ApplyMoveFile(string sourcePath, string destPath)
+        internal static EditApplyResult ApplyMoveFile(string sourcePath, string destPath)
         {
             var result = new EditApplyResult
             {
