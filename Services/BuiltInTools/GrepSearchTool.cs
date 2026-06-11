@@ -123,11 +123,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.BuiltInTools
                 try
                 {
                     filesToSearch = Directory.EnumerateFiles(searchDir, cleanGlob, searchOption)
+                        .Where(f => !IsExcludedDirectory(Path.GetDirectoryName(f) ?? ""))
                         .Take(maxFilesToSearch);
                 }
                 catch
                 {
                     filesToSearch = Directory.EnumerateFiles(searchRoot, "*.*", SearchOption.AllDirectories)
+                        .Where(f => !IsExcludedDirectory(Path.GetDirectoryName(f) ?? ""))
                         .Take(maxFilesToSearch);
                 }
 
@@ -141,13 +143,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.BuiltInTools
                 foreach (var file in filesToSearch)
                 {
                     if (results.Count >= maxResults) break;
-
-                    string dirName = Path.GetDirectoryName(file) ?? "";
-                    if (ExcludeDirs.Any(d =>
-                        dirName.IndexOf(Path.DirectorySeparatorChar + d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) >= 0
-                        || dirName.EndsWith(Path.DirectorySeparatorChar + d, StringComparison.OrdinalIgnoreCase)
-                        || dirName.Equals(d, StringComparison.OrdinalIgnoreCase)))
-                        continue;
 
                     try
                     {
@@ -189,6 +184,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.BuiltInTools
             {
                 return Task.FromResult(LocalizationService.Instance.Format("tool.grepSearch.failed", ex.Message));
             }
+        }
+
+        /// <summary>
+        /// 检查目录是否属于排除列表（bin, obj, node_modules 等）。
+        /// 提取为独立方法，供枚举阶段（.Take 之前）过滤使用。
+        /// </summary>
+        private static bool IsExcludedDirectory(string dirName)
+        {
+            if (string.IsNullOrEmpty(dirName)) return false;
+            return ExcludeDirs.Any(d =>
+                dirName.IndexOf(Path.DirectorySeparatorChar + d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) >= 0
+                || dirName.EndsWith(Path.DirectorySeparatorChar + d, StringComparison.OrdinalIgnoreCase)
+                || dirName.Equals(d, StringComparison.OrdinalIgnoreCase));
         }
     }
 }
