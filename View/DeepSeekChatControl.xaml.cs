@@ -565,10 +565,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
             var info = balance.BalanceInfos[0];
             string symbol = GetCurrencySymbol(info.Currency);
 
-            bool isChinese = LocalizationService.Instance.CurrentLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
-            return isChinese
-                ? $"💰 余额: {symbol}{info.TotalBalance}"
-                : $"💰 Balance: {symbol}{info.TotalBalance}";
+            return LocalizationService.Instance.Format("agent.panel.balance", symbol, info.TotalBalance);
         }
 
         /// <summary>
@@ -605,7 +602,6 @@ namespace DeepSeek_v4_for_VisualStudio.View
             long cacheMissTokens = _apiService.TotalCacheMissTokens;
             long totalTokens = promptTokens + completionTokens;
 
-            bool isChinese = LocalizationService.Instance.CurrentLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
 
             string FormatTokens(long n) => n >= 1000 ? $"{n / 1000.0:F1}K" : n.ToString();
 
@@ -637,9 +633,8 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
                 string modelLabel = isFlash ? "Flash" : "Pro";
 
-                apiPart = isChinese
-                    ? $"📊 本会话: 入 {FormatTokens(promptTokens)} 出 {FormatTokens(completionTokens)} · {modelLabel} {costStr}"
-                    : $"📊 Session: {FormatTokens(promptTokens)} in, {FormatTokens(completionTokens)} out · {modelLabel} {costStr}";
+                apiPart = LocalizationService.Instance.Format("agent.panel.sessionTokenUsage",
+                    FormatTokens(promptTokens), FormatTokens(completionTokens), modelLabel, costStr);
             }
 
             // ── 上下文窗口利用率（仅在有对话内容时显示）──
@@ -651,7 +646,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 double usagePercent = _contextManager.UsagePercent;
                 if (estimatedTokens > 0)
                 {
-                    string ctxLabel = isChinese ? "上下文" : "Context";
+                    string ctxLabel = LocalizationService.Instance["agent.panel.contextLabel"];
                     string warnIcon = usagePercent > 90 ? " ⚠️" : usagePercent > 70 ? " ℹ️" : "";
                     ctxPart = $"📐 {ctxLabel}: {FormatTokens(estimatedTokens)}/{FormatTokens(tokenBudget)} ({usagePercent:F0}%){warnIcon}";
                 }

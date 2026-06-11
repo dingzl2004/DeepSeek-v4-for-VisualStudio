@@ -2837,7 +2837,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             // 步骤执行情况
             if (plan.Steps.Count > 0)
             {
-                sb.AppendLine("## 步骤执行情况");
+                sb.AppendLine(L["edit.summary.stepExecutionHeader"]);
                 foreach (var step in plan.Steps)
                 {
                     string statusIcon = step.Status == AgentStepStatus.Completed ? "✅"
@@ -2847,7 +2847,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
                         ? step.ResultSummary!
                         : LocalizationService.Instance["agent.step.noDetail"];
-                    sb.AppendLine($"- {statusIcon} **步骤 {step.Index}**: {step.Title} — {summary}");
+                    sb.AppendLine(L.Format("edit.summary.stepLineFormat",
+                        statusIcon, step.Index, step.Title, summary));
                 }
                 sb.AppendLine();
             }
@@ -2886,9 +2887,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 int failed = plan.Steps.Count(s => s.Status == AgentStepStatus.Failed);
                 int skipped = plan.Steps.Count(s => s.Status == AgentStepStatus.Skipped);
 
-                sb.Append($"📊 **{plan.Title}**: ");
-                sb.Append($"✅ {completed} / ❌ {failed} / ⏭️ {skipped}");
-                sb.AppendLine();
+                sb.AppendLine(L.Format("edit.summary.executionHeader", plan.Title, 
+                    $"✅ {completed} / ❌ {failed} / ⏭️ {skipped}"));
             }
 
             // 文件变更
@@ -2904,7 +2904,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     })
                     .ToList();
 
-                sb.AppendLine($"📝 **{L["edit.summary.fileCount"]}**: {mergedFiles.Count} 个");
+                sb.AppendLine(L.Format("edit.summary.fileCountWithValue",
+                    L["edit.summary.fileCount"], mergedFiles.Count.ToString()));
                 foreach (var file in mergedFiles)
                 {
                     sb.AppendLine($"  - `{file.FileName}` (+{file.LinesAdded} -{file.LinesRemoved})");
@@ -2912,7 +2913,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             }
             else
             {
-                sb.AppendLine($"📝 **{L["edit.summary.fileCount"]}**: 0");
+                sb.AppendLine(L.Format("edit.summary.fileCountWithValue",
+                    L["edit.summary.fileCount"], "0"));
             }
 
             // 构建结果
