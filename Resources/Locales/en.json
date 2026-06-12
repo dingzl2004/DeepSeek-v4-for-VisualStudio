@@ -565,7 +565,7 @@
     "agent.edit.description":  "Execute code modifications. Modify files step by step according to the plan, with build verification and permission confirmation.",
     "agent.edit.argumentHint":  "Describe the code modification task",
     "agent.edit.handoffAskLabel":  "Generate Change Summary",
-    "agent.edit.handoffAskPrompt":  "Code changes are complete. Here are the change details. Please generate a detailed change summary based on the following context:\n\n",
+    "agent.edit.handoffAskPrompt":  "Code changes are complete. Please generate a user-facing summary describing what was accomplished (features implemented, bugs fixed, optimizations made) — NOT a file list. Focus on functional outcomes.\n\n",
     "agent.edit.handoffBuildLabel":  "Diagnose Build Errors",
     "agent.edit.handoffBuildPrompt":  "Code changes are complete, but the build may have issues. Please run build verification and fix all compilation errors:\n\n",
     "agent.edit.handoffBuildWarningHint":  "⚠️ The final build has warnings or failures — please mention this in the summary.",

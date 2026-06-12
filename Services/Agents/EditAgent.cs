@@ -2805,10 +2805,28 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             sb.AppendLine(L["agent.edit.handoffAskPrompt"]);
             sb.AppendLine();
             sb.AppendLine($"**{L["edit.summary.taskLabel"]}**: {plan.Title}");
-            sb.AppendLine($"**{L["edit.summary.fileCount"]}**: {plan.ChangedFiles.Count}");
             sb.AppendLine();
 
-            // 合并相同文件的变更记录
+            // ── 步骤执行情况（优先：描述完成了什么）──
+            if (plan.Steps.Count > 0)
+            {
+                sb.AppendLine(L["edit.summary.stepExecutionHeader"]);
+                foreach (var step in plan.Steps)
+                {
+                    string statusIcon = step.Status == AgentStepStatus.Completed ? "✅"
+                        : step.Status == AgentStepStatus.Failed ? "❌"
+                        : step.Status == AgentStepStatus.Skipped ? "⏭️"
+                        : "🔄";
+                    string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
+                        ? step.ResultSummary!
+                        : LocalizationService.Instance["agent.step.noDetail"];
+                    sb.AppendLine(L.Format("edit.summary.stepLineFormat",
+                        statusIcon, step.Index, step.Title, summary));
+                }
+                sb.AppendLine();
+            }
+
+            // ── 文件变更统计（辅助参考）──
             if (plan.ChangedFiles.Count > 0)
             {
                 var mergedFiles = plan.ChangedFiles
@@ -2830,25 +2848,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 foreach (var file in mergedFiles)
                 {
                     sb.AppendLine($"- **{file.FileName}** (+{file.LinesAdded} -{file.LinesRemoved})");
-                }
-                sb.AppendLine();
-            }
-
-            // 步骤执行情况
-            if (plan.Steps.Count > 0)
-            {
-                sb.AppendLine(L["edit.summary.stepExecutionHeader"]);
-                foreach (var step in plan.Steps)
-                {
-                    string statusIcon = step.Status == AgentStepStatus.Completed ? "✅"
-                        : step.Status == AgentStepStatus.Failed ? "❌"
-                        : step.Status == AgentStepStatus.Skipped ? "⏭️"
-                        : "🔄";
-                    string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
-                        ? step.ResultSummary!
-                        : LocalizationService.Instance["agent.step.noDetail"];
-                    sb.AppendLine(L.Format("edit.summary.stepLineFormat",
-                        statusIcon, step.Index, step.Title, summary));
                 }
                 sb.AppendLine();
             }

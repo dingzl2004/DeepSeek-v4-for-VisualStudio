@@ -564,7 +564,7 @@
     "agent.edit.description":  "执行代码修改。按计划逐步修改文件，支持构建验证和权限确认。",
     "agent.edit.argumentHint":  "描述要执行的代码修改任务",
     "agent.edit.handoffAskLabel":  "生成变更总结",
-    "agent.edit.handoffAskPrompt":  "代码修改已完成，以下是变更详情。请根据以下上下文生成一份详细的变更总结：\n\n",
+    "agent.edit.handoffAskPrompt":  "代码修改已完成。请生成一份面向用户的变更总结，描述完成了什么（实现了什么功能、修复了什么问题、做了什么优化）——不要罗列文件清单。聚焦功能成果。\n\n",
     "agent.edit.handoffBuildLabel":  "诊断编译错误",
     "agent.edit.handoffBuildPrompt":  "代码修改已完成，但编译可能存在问题。请执行构建验证并修复所有编译错误：\n\n",
     "agent.edit.handoffBuildWarningHint":  "⚠️ 最终编译存在警告或失败，请在总结中提及。",

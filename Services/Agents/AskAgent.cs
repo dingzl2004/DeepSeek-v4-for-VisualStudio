@@ -497,7 +497,21 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     new ChatApiMessage
                     {
                         Role = "system",
-                        Content = "你是一个代码变更总结助手。请将下方结构化摘要润色为流畅的自然语言段落（3-5句话），保持客观描述，不评价代码质量。只输出润色后的文本，不添加任何额外说明。"
+                        Content = "你是一个代码变更总结助手。请基于下方结构化摘要，生成一段面向用户的变更总结（3-5句话）。\n\n" +
+                            "核心要求：\n" +
+                            "1. 聚焦「完成了什么」——实现了什么功能、修复了什么问题、做了什么优化\n" +
+                            "2. 不要罗列修改了哪些文件、增删了多少行代码——这些是技术细节，不是用户关心的\n" +
+                            "3. 使用用户视角的语言，描述本次变更对项目的影响和价值\n" +
+                            "4. 如果变更涉及多个方面，按重要性排列\n" +
+                            "5. 保持客观描述，不评价代码质量\n\n" +
+                            "反面示例（不要这样写）：\n" +
+                            "- 「修改了 Services/FooService.cs，新增 150 行，删除 80 行」\n" +
+                            "- 「在 BarController.cs 和 BazHelper.cs 中做了改动」\n\n" +
+                            "正面示例（应该这样写）：\n" +
+                            "- 「实现了用户登录功能，支持 JWT 令牌认证和刷新机制」\n" +
+                            "- 「修复了并发请求导致的数据竞争问题，添加了线程安全保护」\n" +
+                            "- 「重构了缓存模块，将命中率从 60% 提升到 92%」\n\n" +
+                            "只输出润色后的文本，不添加任何额外说明。"
                     },
                     new ChatApiMessage
                     {
@@ -568,10 +582,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             sb.AppendLine(L["edit.summary.complete"]);
             sb.AppendLine();
             sb.AppendLine($"**{L["edit.summary.taskLabel"]}**: {plan.Title}");
-            sb.AppendLine($"**{L["edit.summary.fileCount"]}**: {plan.ChangedFiles.Count}");
             sb.AppendLine();
 
-            // ── AI 生成的文字总结 ──
+            // ── AI 生成的文字总结（功能性摘要，放在最前面）──
             if (!string.IsNullOrWhiteSpace(aiSummary))
             {
                 sb.AppendLine($"### {L["edit.summary.changeSummary"]}");
@@ -580,9 +593,33 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 sb.AppendLine();
             }
 
+            // ── 步骤执行情况 ──
+            if (plan.Steps.Count > 0)
+            {
+                sb.AppendLine(L["edit.summary.stepDetails"]);
+                sb.AppendLine();
+                sb.AppendLine($"**{L["edit.summary.stepCount"]}**: {plan.Steps.Count(s => s.Status == AgentStepStatus.Completed)} / {plan.Steps.Count}");
+                sb.AppendLine();
+                foreach (var step in plan.Steps)
+                {
+                    string icon = step.Status switch
+                    {
+                        AgentStepStatus.Completed => "✅",
+                        AgentStepStatus.Failed => "❌",
+                        AgentStepStatus.Skipped => "⏭️",
+                        _ => "⬜",
+                    };
+                    string summary = !string.IsNullOrWhiteSpace(step.ResultSummary)
+                        ? step.ResultSummary
+                        : "(无)";
+                    sb.AppendLine($"- {icon} **{step.Title}**: {summary}");
+                }
+                sb.AppendLine();
+            }
+
+            // ── 文件变更统计（折叠为附录）──
             if (plan.ChangedFiles.Count > 0)
             {
-                // ── 按文件路径合并相同文件的多条变更记录 ──
                 var mergedFiles = plan.ChangedFiles
                     .GroupBy(c => NormalizePath(c.FilePath), StringComparer.OrdinalIgnoreCase)
                     .Select(g => new
@@ -604,7 +641,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     string delta = $"{(change.LinesAdded > 0 ? $"+{change.LinesAdded}" : "")}"
                         + $"{(change.LinesRemoved > 0 ? $" -{change.LinesRemoved}" : "")}";
                     string desc = change.Description ?? (change.LinesAdded > 0 && change.LinesRemoved == 0 ? L["agent.panel.fileChangeAdded"] : change.LinesRemoved > 0 && change.LinesAdded == 0 ? L["agent.panel.fileChangeDeleted"] : L["agent.panel.fileChangeModified"]);
-                    // 截断过长的描述
                     if (desc.Length > 40) desc = desc.Substring(0, 37) + "...";
                     sb.AppendLine($"| `{change.FileName}` | {delta} | {desc} |");
                 }
