@@ -2,6 +2,7 @@
 using Markdig;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -911,6 +912,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 htmlContent = ScriptCloseRegex.Replace(htmlContent, "&lt;/script&gt;");
                 htmlContent = EventHandlerRegex.Replace(htmlContent, "data-xss-removed=");
 
+                // ── 文件名/符号名可点击导航处理 ──
+                htmlContent = MakeFileAndSymbolLinks(htmlContent);
+
                 return htmlContent;
             }
             catch
@@ -926,6 +930,57 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             inner = System.Net.WebUtility.HtmlDecode(inner);
             string escaped = System.Net.WebUtility.HtmlEncode(inner);
             return $"<pre><code class=\"language-mermaid\">{escaped}</code></pre>";
+        }
+
+        // 常见源代码文件扩展名
+        private static readonly HashSet<string> SourceFileExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cs", ".vb", ".cpp", ".c", ".h", ".hpp", ".fs", ".fsx",
+            ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
+            ".swift", ".kt", ".php", ".rb", ".lua", ".sql",
+            ".xml", ".xaml", ".json", ".yaml", ".yml", ".md", ".txt",
+            ".csproj", ".vbproj", ".sln", ".slnx", ".config", ".css",
+            ".html", ".htm", ".razor", ".cshtml", ".vbhtml",
+        };
+
+        // PascalCase 标识符模式（类名/方法名/属性名）
+        private static readonly Regex PascalCasePattern = new(
+            @"^[A-Z][A-Za-z0-9_]{2,}$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 后处理 HTML：将 <code> 中的文件名和符号名转为可点击的导航链接。
+        /// 使用自定义 URI scheme vs-navigate:// 供 WebView2 NavigationStarting 拦截。
+        /// </summary>
+        private static string MakeFileAndSymbolLinks(string html)
+        {
+            // ── 匹配 <code>...</code> 标签（非代码块内的行内代码）──
+            return Regex.Replace(html,
+                @"<code>(.*?)</code>",
+                match =>
+                {
+                    string inner = match.Groups[1].Value;
+                    // 跳过空内容和过长内容
+                    if (string.IsNullOrWhiteSpace(inner) || inner.Length > 80)
+                        return match.Value;
+
+                    // ── 检测文件名 ──
+                    string ext = Path.GetExtension(inner);
+                    if (!string.IsNullOrEmpty(ext) && SourceFileExtensions.Contains(ext))
+                    {
+                        string encodedName = Uri.EscapeDataString(inner);
+                        return $"<code><a class=\"file-link\" href=\"vs-navigate://file?name={encodedName}\" title=\"Open {inner}\">{inner}</a></code>";
+                    }
+
+                    // ── 检测符号名（PascalCase）──
+                    if (PascalCasePattern.IsMatch(inner) && inner.Length >= 3)
+                    {
+                        string encodedName = Uri.EscapeDataString(inner);
+                        return $"<code><a class=\"symbol-link\" href=\"vs-navigate://symbol?name={encodedName}\" title=\"Go to {inner}\">{inner}</a></code>";
+                    }
+
+                    return match.Value;
+                },
+                RegexOptions.Singleline);
         }
 
         #endregion

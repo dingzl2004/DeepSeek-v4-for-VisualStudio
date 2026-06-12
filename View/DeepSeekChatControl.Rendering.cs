@@ -111,6 +111,7 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 Logger.Info("[Render] CoreWebView2InitializationCompleted: 成功");
                 ChatWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                 ChatWebView.CoreWebView2.NewWindowRequested += CoreWebView2_NewWindowRequested;
+                ChatWebView.CoreWebView2.NavigationStarting += CoreWebView2_NavigationStarting;
 
                 // ── 禁用 WebView2 右键菜单，仅保留"复制"功能 ──
                 ChatWebView.CoreWebView2.ContextMenuRequested += (cmSender, cmArgs) =>

@@ -5,6 +5,8 @@ using DeepSeek_v4_for_VisualStudio.ToolWindows;
 using DeepSeek_v4_for_VisualStudio.Utils;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
@@ -12,6 +14,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -1563,6 +1566,239 @@ namespace DeepSeek_v4_for_VisualStudio.View
             catch (Exception ex)
             {
                 Logger.Error($"打开外部浏览器失败 ({e.Uri}): {ex.Message}", ex);
+            }
+        }
+
+        /// <summary>
+        /// WebView2 导航请求拦截：处理 vs-navigate:// 自定义协议链接。
+        /// 文件名和符号名在 Markdown 渲染时被转为 vs-navigate://file?name=... 或 vs-navigate://symbol?name=... 链接。
+        /// </summary>
+        private void CoreWebView2_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Uri)) return;
+
+            // ── 只拦截 vs-navigate:// 自定义协议 ──
+            if (!e.Uri.StartsWith("vs-navigate://", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            e.Cancel = true; // 阻止 WebView2 导航
+
+            try
+            {
+                Uri uri = new Uri(e.Uri);
+                string? name = System.Net.WebUtility.UrlDecode(
+                    System.Web.HttpUtility.ParseQueryString(uri.Query)["name"]);
+
+                if (string.IsNullOrEmpty(name)) return;
+
+                if (uri.Host == "file")
+                {
+                    _ = NavigateToFileAsync(name);
+                }
+                else if (uri.Host == "symbol")
+                {
+                    _ = NavigateToSymbolAsync(name);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Nav] vs-navigate 拦截失败 ({e.Uri}): {ex.Message}", ex);
+            }
+        }
+
+        /// <summary>
+        /// 导航到工作区中的指定文件（通过文件名搜索并打开）。
+        /// </summary>
+        private async Task NavigateToFileAsync(string fileName)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            try
+            {
+                // ── 获取工作区根目录 ──
+                string? slnPath = _solutionPath;
+                if (string.IsNullOrEmpty(slnPath) || (!File.Exists(slnPath) && !Directory.Exists(slnPath)))
+                {
+                    Logger.Warn($"[Nav] 无法导航到文件 {fileName}: 解决方案路径无效");
+                    return;
+                }
+
+                string workspaceRoot = File.Exists(slnPath)
+                    ? Path.GetDirectoryName(slnPath) ?? slnPath
+                    : slnPath;
+
+                // 递归搜索匹配的文件
+                var matches = await Task.Run(() =>
+                    Directory.GetFiles(workspaceRoot, fileName, SearchOption.AllDirectories)
+                        .Where(f => !f.Contains("\\bin\\") && !f.Contains("\\obj\\")
+                            && !f.Contains("\\.git\\") && !f.Contains("\\node_modules\\"))
+                        .ToList());
+
+                if (matches.Count == 0)
+                {
+                    Logger.Warn($"[Nav] 未找到文件: {fileName} in {workspaceRoot}");
+                    return;
+                }
+
+                // 优先选择非 bin/obj 的匹配
+                string filePath = matches.First();
+
+                // 通过 VS SDK 打开文件
+                var openDoc = await ServiceProvider.GetGlobalServiceAsync(
+                    typeof(Microsoft.VisualStudio.Shell.Interop.SVsUIShellOpenDocument))
+                    as Microsoft.VisualStudio.Shell.Interop.IVsUIShellOpenDocument;
+
+                if (openDoc != null)
+                {
+                    var logicalView = Microsoft.VisualStudio.VSConstants.LOGVIEWID_Primary;
+                    openDoc.OpenDocumentViaProject(
+                        filePath, ref logicalView,
+                        out _, out _, out _,
+                        out Microsoft.VisualStudio.Shell.Interop.IVsWindowFrame frame);
+                    frame?.Show();
+                    Logger.Info($"[Nav] 打开文件: {filePath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Nav] 导航到文件失败 ({fileName}): {ex.Message}", ex);
+            }
+        }
+
+        /// <summary>
+        /// 导航到工作区中的指定符号定义（通过文件内容搜索定位并跳转到对应行）。
+        /// </summary>
+        private async Task NavigateToSymbolAsync(string symbolName)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            try
+            {
+                // ── 获取工作区根目录 ──
+                string? slnPath = _solutionPath;
+                if (string.IsNullOrEmpty(slnPath) || (!File.Exists(slnPath) && !Directory.Exists(slnPath)))
+                {
+                    Logger.Warn($"[Nav] 无法导航到符号 {symbolName}: 解决方案路径无效");
+                    return;
+                }
+
+                string workspaceRoot = File.Exists(slnPath)
+                    ? Path.GetDirectoryName(slnPath) ?? slnPath
+                    : slnPath;
+
+                // 在源码文件中搜索符号定义
+                var sourceExts = new[] { ".cs", ".vb", ".cpp", ".h", ".hpp", ".fs", ".fsx" };
+                var definitionPatterns = new[]
+                {
+                    $@"\b(class|interface|struct|enum|record|delegate)\s+{Regex.Escape(symbolName)}\b",
+                    $@"\b(void|int|string|bool|var|async|Task|object|double|float|long|byte|char)\s+{Regex.Escape(symbolName)}\s*[\(\<]",
+                    $@"\b(public|private|protected|internal|static|override|virtual|abstract|sealed|partial)\s+.*\b{Regex.Escape(symbolName)}\b",
+                };
+
+                string? foundFile = null;
+                int foundLine = 0;
+
+                await Task.Run(() =>
+                {
+                    foreach (var ext in sourceExts)
+                    {
+                        if (foundFile != null) break;
+                        try
+                        {
+                            var files = Directory.GetFiles(workspaceRoot, "*" + ext, SearchOption.AllDirectories)
+                                .Where(f => !f.Contains("\\bin\\") && !f.Contains("\\obj\\")
+                                    && !f.Contains("\\.git\\") && !f.Contains("\\node_modules\\")
+                                    && !f.Contains("\\packages\\"));
+                            foreach (var file in files.Take(500))
+                            {
+                                try
+                                {
+                                    var lines = File.ReadAllLines(file);
+                                    for (int i = 0; i < lines.Length; i++)
+                                    {
+                                        // 优先匹配带类型声明的定义
+                                        foreach (var pattern in definitionPatterns)
+                                        {
+                                            if (Regex.IsMatch(lines[i], pattern))
+                                            {
+                                                foundFile = file;
+                                                foundLine = i + 1;
+                                                break;
+                                            }
+                                        }
+                                        if (foundFile != null) break;
+
+                                        // 宽松匹配：行中包含符号名
+                                        if (lines[i].Contains(symbolName))
+                                        {
+                                            foundFile = file;
+                                            foundLine = i + 1;
+                                            break;
+                                        }
+                                    }
+                                    if (foundFile != null) break;
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                });
+
+                if (foundFile != null)
+                {
+                    // 通过 VS SDK 打开文件
+                    var openDoc = await ServiceProvider.GetGlobalServiceAsync(
+                        typeof(Microsoft.VisualStudio.Shell.Interop.SVsUIShellOpenDocument))
+                        as Microsoft.VisualStudio.Shell.Interop.IVsUIShellOpenDocument;
+
+                    if (openDoc != null)
+                    {
+                        var logicalView = Microsoft.VisualStudio.VSConstants.LOGVIEWID_Primary;
+                        openDoc.OpenDocumentViaProject(
+                            foundFile, ref logicalView,
+                            out _, out _, out _,
+                            out Microsoft.VisualStudio.Shell.Interop.IVsWindowFrame frame);
+                        frame?.Show();
+
+                        // 跳转到指定行
+                        // 跳转到指定行
+                        if (foundLine > 0)
+                        {
+                            try
+                            {
+                                var textManager = Package.GetGlobalService(
+                                    typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager))
+                                    as Microsoft.VisualStudio.TextManager.Interop.IVsTextManager;
+
+                                if (textManager != null)
+                                {
+                                    Microsoft.VisualStudio.TextManager.Interop.IVsTextView? textView;
+                                    textManager.GetActiveView(1, null, out textView);
+                                    if (textView != null)
+                                    {
+                                        textView.SetCaretPos(foundLine - 1, 0);
+                                        textView.CenterLines(foundLine - 1, 1);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Warn($"[Nav] 跳转到行 {foundLine} 失败: {ex.Message}");
+                            }
+                        }
+
+                        Logger.Info($"[Nav] 打开符号 {symbolName}: {foundFile}:{foundLine}");
+                    }
+                }
+                else
+                {
+                    Logger.Warn($"[Nav] 未找到符号定义: {symbolName} in {workspaceRoot}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Nav] 导航到符号失败 ({symbolName}): {ex.Message}", ex);
             }
         }
 

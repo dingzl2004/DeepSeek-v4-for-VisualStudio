@@ -376,7 +376,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 body{background-color:#1e1e1e;color:#cccccc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.6;padding:0;overflow-wrap:break-word;word-wrap:break-word;scroll-behavior:smooth}
 #chat-container{padding:12px 12px 30px 12px;max-width:100%;margin:0}
 h1,h2,h3,h4,h5,h6{color:#e0e0e0;margin:16px 0 8px;font-weight:600}h1{font-size:1.3em}h2{font-size:1.15em}h3{font-size:1.05em}
-p{margin:6px 0}a{color:#4fc1ff;text-decoration:none}a:hover{text-decoration:underline}strong,b{color:#e8e8e8;font-weight:600}
+p{margin:6px 0}a{color:#4fc1ff;text-decoration:none}a:hover{text-decoration:underline}a.file-link,a.symbol-link{cursor:pointer;border-bottom:1px dashed #4fc1ff}a.file-link:hover,a.symbol-link:hover{border-bottom-style:solid}strong,b{color:#e8e8e8;font-weight:600}
 code{background:#333;color:#f48771;padding:1px 6px;border-radius:3px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:0.9em}
 pre{background:#252526;border:1px solid #3c3c3c;border-radius:8px;padding:32px 14px 12px 14px;margin:10px 0;overflow-x:auto;overflow-y:auto;max-height:480px;font-size:0.88em;line-height:1.5;position:relative}
 pre code{background:transparent;color:#d4d4d4;padding:0;font-size:inherit;white-space:pre;display:block}
@@ -483,7 +483,7 @@ table{border-collapse:collapse;margin:8px 0;width:100%}th,td{border:1px solid #4
 body{background-color:#ffffff;color:#333333;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.6;padding:0;overflow-wrap:break-word;word-wrap:break-word;scroll-behavior:smooth}
 #chat-container{padding:12px 12px 30px 12px;max-width:100%;margin:0}
 h1,h2,h3,h4,h5,h6{color:#1e1e1e;margin:16px 0 8px;font-weight:600}h1{font-size:1.3em}h2{font-size:1.15em}h3{font-size:1.05em}
-p{margin:6px 0}a{color:#0078d4;text-decoration:none}a:hover{text-decoration:underline}strong,b{color:#1a1a1a;font-weight:600}
+p{margin:6px 0}a{color:#0078d4;text-decoration:none}a:hover{text-decoration:underline}a.file-link,a.symbol-link{cursor:pointer;border-bottom:1px dashed #0078d4}a.file-link:hover,a.symbol-link:hover{border-bottom-style:solid}strong,b{color:#1a1a1a;font-weight:600}
 code{background:#f0f0f0;color:#c7254e;padding:1px 6px;border-radius:3px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:0.9em}
 pre{background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;padding:32px 14px 12px 14px;margin:10px 0;overflow-x:auto;overflow-y:auto;max-height:480px;font-size:0.88em;line-height:1.5;position:relative}
 pre code{background:transparent;color:#24292f;padding:0;font-size:inherit;white-space:pre;display:block}
