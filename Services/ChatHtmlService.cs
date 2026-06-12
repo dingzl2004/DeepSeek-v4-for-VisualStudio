@@ -823,6 +823,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         private static readonly Regex PascalCasePattern = new(
             @"^[A-Z][A-Za-z0-9_]{2,}$", RegexOptions.Compiled);
 
+        // 下划线前缀标识符模式（私有字段：_fieldName）
+        private static readonly Regex UnderscorePrefixPattern = new(
+            @"^_[A-Za-z][A-Za-z0-9_]{2,}$", RegexOptions.Compiled);
+
+        // 带括号的方法调用模式（MethodName() → 提取 MethodName）
+        private static readonly Regex MethodCallSuffix = new(
+            @"^([A-Z][A-Za-z0-9_]{2,})\(\)$", RegexOptions.Compiled);
+
         /// <summary>
         /// 后处理 HTML：将 <code> 中的文件名和符号名转为可点击的导航链接。
         /// 使用自定义 URI scheme vs-navigate:// 供 WebView2 NavigationStarting 拦截。
@@ -849,12 +857,22 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                         return $"<code><a class=\"file-link\" href=\"vs-navigate://file?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
 
-                    // ── 检测符号名（PascalCase）──
-                    if (PascalCasePattern.IsMatch(inner) && inner.Length >= 3)
+                    // ── 检测符号名（PascalCase / _underscorePrefix / MethodName()）──
+                    string symbolName = inner;
+
+                    // 去除方法调用后缀 MethodName() → MethodName
+                    var callMatch = MethodCallSuffix.Match(symbolName);
+                    if (callMatch.Success)
+                        symbolName = callMatch.Groups[1].Value;
+
+                    bool isSymbol = PascalCasePattern.IsMatch(symbolName)
+                                 || UnderscorePrefixPattern.IsMatch(symbolName);
+
+                    if (isSymbol && symbolName.Length >= 3)
                     {
-                        string encodedName = Uri.EscapeDataString(inner);
+                        string encodedName = Uri.EscapeDataString(symbolName);
                         string safeInner = EscapeHtmlAttribute(inner);
-                        string title = L.Format("chat.html.symbolLinkTitle", safeInner);
+                        string title = L.Format("chat.html.symbolLinkTitle", symbolName);
                         return $"<code><a class=\"symbol-link\" href=\"vs-navigate://symbol?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
 
