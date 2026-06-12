@@ -875,13 +875,29 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             var L = LocalizationService.Instance;
 
-            // ── 汇总操作类型描述（兼容工具编辑路径和文本格式路径）──
-            string operationTypeLabel = hasToolEdits && string.IsNullOrWhiteSpace(result)
-                ? "tool_edit"
-                : operationType.ToString();
+            // ── 汇总操作类型描述 ──
+            // 优先使用工具编辑标签（当工具编辑已发生时，文本格式检测可能为误报）
+            string operationTypeLabel;
+            if (hasToolEdits)
+            {
+                operationTypeLabel = "tool_edit";
+            }
+            else if (!string.IsNullOrWhiteSpace(result))
+            {
+                operationTypeLabel = operationType.ToString();
+            }
+            else
+            {
+                operationTypeLabel = "unknown";
+            }
 
-            step.ResultSummary = changes.Count > 0
-                ? string.Format(L["agent.log.editFilesModified"], changes.Count, operationTypeLabel)
+            // ── 使用实际变更文件数（而非仅 appliedResults 中的成功计数）──
+            int actualChangedFileCount = changes.Count > 0
+                ? changes.Count
+                : plan.ChangedFiles.Count;
+
+            step.ResultSummary = actualChangedFileCount > 0
+                ? string.Format(L["agent.log.editFilesModified"], actualChangedFileCount, operationTypeLabel)
                 : string.Format(L["agent.log.editNoFilesChanged"], operationTypeLabel);
 
             // ── 编辑后健全性检查：检测括号不匹配等常见问题 ──

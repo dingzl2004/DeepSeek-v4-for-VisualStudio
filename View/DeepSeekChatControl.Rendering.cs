@@ -120,6 +120,9 @@ namespace DeepSeek_v4_for_VisualStudio.View
                     // Ctrl+C 浏览器原生快捷键不受影响，复制功能保留
                 };
 
+                // ── 禁用 WebView2 状态栏（左下角），避免暴露 vs-navigate:// 等内部链接 URL ──
+                ChatWebView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+
                 // ── 构建初始 HTML 内容 ──
                 // 如果 LoadAndShowAsync 已接管首次渲染，跳过此处的 UpdateBrowser
                 // 以避免先后两次 NavigateToString 导致页面被空白覆盖

@@ -299,7 +299,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
                 // ── 第3层（可选）：用一次无工具 AI 调用润色自然语言部分 ──
                 string aiSummary = string.Empty;
-                if (!string.IsNullOrWhiteSpace(memorySummary) && plan.ChangedFiles.Count > 0)
+                bool hasMeaningfulChanges = plan.ChangedFiles.Count > 0
+                    || plan.Steps.Any(s => s.Status == AgentStepStatus.Completed && !string.IsNullOrWhiteSpace(s.ResultSummary));
+                if (!string.IsNullOrWhiteSpace(memorySummary) && hasMeaningfulChanges)
                 {
                     aiSummary = await PolishSummaryWithAiAsync(directSummary, context);
                 }
@@ -399,7 +401,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             sb.AppendLine(L["edit.summary.complete"]);
             sb.AppendLine();
             sb.AppendLine($"**{L["edit.summary.taskLabel"]}**: {plan.Title}");
-            sb.AppendLine($"**{L["edit.summary.fileCount"]}**: {plan.ChangedFiles.Count}");
+            if (plan.ChangedFiles.Count > 0)
+                sb.AppendLine($"**{L["edit.summary.fileCount"]}**: {plan.ChangedFiles.Count}");
 
             // ── 步骤执行情况 ──
             int completed = plan.Steps.Count(s => s.Status == AgentStepStatus.Completed);

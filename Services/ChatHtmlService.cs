@@ -1,4 +1,4 @@
-﻿using DeepSeek_v4_for_VisualStudio.Models;
+using DeepSeek_v4_for_VisualStudio.Models;
 using Markdig;
 using System;
 using System.Collections.Generic;
@@ -967,14 +967,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     if (!string.IsNullOrEmpty(ext) && SourceFileExtensions.Contains(ext))
                     {
                         string encodedName = Uri.EscapeDataString(inner);
-                        return $"<code><a class=\"file-link\" href=\"vs-navigate://file?name={encodedName}\" title=\"Open {inner}\">{inner}</a></code>";
+                        string safeInner = EscapeHtmlAttribute(inner);
+                        string title = L.Format("chat.html.fileLinkTitle", safeInner);
+                        return $"<code><a class=\"file-link\" href=\"vs-navigate://file?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
 
                     // ── 检测符号名（PascalCase）──
                     if (PascalCasePattern.IsMatch(inner) && inner.Length >= 3)
                     {
                         string encodedName = Uri.EscapeDataString(inner);
-                        return $"<code><a class=\"symbol-link\" href=\"vs-navigate://symbol?name={encodedName}\" title=\"Go to {inner}\">{inner}</a></code>";
+                        string safeInner = EscapeHtmlAttribute(inner);
+                        string title = L.Format("chat.html.symbolLinkTitle", safeInner);
+                        return $"<code><a class=\"symbol-link\" href=\"vs-navigate://symbol?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
 
                     return match.Value;
