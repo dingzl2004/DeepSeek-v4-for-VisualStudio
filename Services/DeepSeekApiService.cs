@@ -621,6 +621,27 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 Logger.Warn("[Cache] PrefixCache 未注入，无法进行前缀稳定性监控");
             }
 
+            // ── 消息前缀哈希日志（v1.1.11）──
+            //     计算 messages 在关键前缀边界 [0]、[0..1]、[0..2]、[0..all] 处的 SHA-256 哈希。
+            //     跨调用对比哈希值可精确定位缓存断裂发生的位置：
+            //     - [0] 变化 → SharedImmutablePrefix 不一致（不应发生）
+            //     - [0..1] 变化 → Agent 切换或 fixedPrompt 更新
+            //     - [0..2] 变化 → 动态上下文（搜索/记忆/RAG）变化
+            //     - [0..all] 变化 → 对话历史增长或压缩
+            try
+            {
+                var prefixHashes = PrefixCacheManager.ComputeMessagePrefixHashes(request.Messages);
+                if (prefixHashes.Count > 0)
+                {
+                    string hashLog = PrefixCacheManager.FormatPrefixHashes(prefixHashes, request.Messages.Count);
+                    Logger.Info($"[Cache] 消息前缀哈希: {hashLog}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Cache] 消息前缀哈希计算失败: {ex.Message}");
+            }
+
             // ── HTTP 层重试（指数退避：1s, 2s, 4s；最多 3 次额外重试）──
             HttpResponseMessage? response = null;
             int sendAttempt = 0;

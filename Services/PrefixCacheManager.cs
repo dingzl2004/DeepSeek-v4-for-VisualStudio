@@ -117,6 +117,75 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
         #endregion
 
+        #region Message Prefix Hashing
+
+        /// <summary>
+        /// 计算消息列表在关键前缀边界处的 SHA-256 哈希值。
+        /// 每条边界 = 从 messages[0] 到当前位置（含）的所有消息的规范化串联。
+        /// 
+        /// 边界定义：
+        ///   [0]      — SharedImmutablePrefix（跨 Agent 不变，最顶层缓存）
+        ///   [0..1]   — + FixedPrompt（Agent 专属提示词，Agent 切换时变化）
+        ///   [0..2]   — + DynamicBlock（搜索/RAG/记忆/压缩摘要，同轮次内稳定）
+        ///   [0..N-1] — 全部消息（完整请求前缀，每次调用不同）
+        /// 
+        /// 规范化格式：每条消息序列化为 "R:role\nC:content\n"，
+        /// 确保 role 和 content 的字节级变化均可被 SHA-256 检测。
+        /// </summary>
+        /// <param name="messages">API 消息列表</param>
+        /// <returns>边界索引 → SHA-256 哈希（16 进制小写）的映射。索引 -1 表示全部消息。</returns>
+        public static Dictionary<int, string> ComputeMessagePrefixHashes(List<ChatApiMessage> messages)
+        {
+            var result = new Dictionary<int, string>();
+            if (messages == null || messages.Count == 0)
+                return result;
+
+            var sb = new StringBuilder();
+
+            // 逐条消息累积规范化文本，在关键边界处计算哈希
+            for (int i = 0; i < messages.Count; i++)
+            {
+                var msg = messages[i];
+                sb.Append('R').Append(':').AppendLine(msg.Role ?? "?");
+                sb.Append('C').Append(':').AppendLine(msg.Content ?? "");
+
+                // 在关键边界处捕获哈希
+                bool isBoundary = i == 0                     // messages[0]
+                               || i == 1                     // messages[0..1]
+                               || i == 2                     // messages[0..2]
+                               || i == messages.Count - 1;   // messages[0..all]
+
+                if (isBoundary)
+                {
+                    result[i] = ComputeSha256(sb.ToString());
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 格式化消息前缀哈希为紧凑日志字符串。
+        /// 例如："[0]=a1b2c3d4 [0..1]=e5f6a7b8 [0..2]=c9d0e1f2 [0..all]=1234abcd"
+        /// </summary>
+        public static string FormatPrefixHashes(Dictionary<int, string> hashes, int messageCount)
+        {
+            var sb = new StringBuilder();
+            foreach (var kvp in hashes.OrderBy(h => h.Key))
+            {
+                if (sb.Length > 0) sb.Append(' ');
+                string label = kvp.Key == messageCount - 1
+                    ? "[0..all]"
+                    : kvp.Key == 0
+                        ? "[0]"
+                        : $"[0..{kvp.Key}]";
+                sb.Append(label).Append('=').Append(kvp.Value.Substring(0, Math.Min(8, kvp.Value.Length)));
+            }
+            return sb.ToString();
+        }
+
+        #endregion
+
         #region Pin & Drift Detection
 
         /// <summary>
