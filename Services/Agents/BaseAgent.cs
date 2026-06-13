@@ -1002,6 +1002,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     while (toolCallHistory.Count > 20)
                         toolCallHistory.RemoveAt(0);
 
+                    // ── 🔑 子Agent缓存优化：在插入 assistant(tool_calls) 前捕获消息列表，
+                    //     供 runSubagent(ExploreAgent) 复用父 Agent 的缓存前缀。
+                    //     必须在 Insert 之前捕获：Insert 后 messages[4] 从 system 变为
+                    //     assistant(tool_calls)，Rule 5 剥离 tool_calls 后残留纯文本
+                    //     assistant，与已缓存的 system(Agent提示词) 结构不同，导致
+                    //     DeepSeek 前缀缓存在 messages[4] 断裂，命中率从 98% 暴跌至 10.9%。
+                    //     提前捕获不含 assistant 的"干净前缀"确保 messages[0..3] 与已缓存
+                    //     版本完全一致，前缀缓存可持续命中。──
+                    if (Context != null && toolCalls.Any(tc => tc.Function.Name == "runSubagent"))
+                    {
+                        Context.ForwardedMessages = new List<ChatApiMessage>(messages);
+                    }
+
                     // ── 添加 assistant 消息（含工具调用）──
                     // 🔑 v1.1.11：插入到 [agent] 之前，保持末尾固定
                     messages.Insert(toolInsertPos, new ChatApiMessage
@@ -1020,13 +1033,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             contentBuilder.Length > 0 ? contentBuilder.ToString() : null,
                             reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null,
                             toolCalls);
-                    }
-
-                    // ── 🔑 子Agent缓存优化：在执行工具前保存当前消息列表，
-                    //     供runSubagent(ExploreAgent)复用父Agent的缓存前缀。──
-                    if (Context != null && toolCalls.Any(tc => tc.Function.Name == "runSubagent"))
-                    {
-                        Context.ForwardedMessages = new List<ChatApiMessage>(messages);
                     }
 
                     // ── 并行执行工具调用（带超时保护，长时工具使用更长超时，已去重）──
