@@ -1,4 +1,4 @@
-using DeepSeek_v4_for_VisualStudio.Models;
+﻿using DeepSeek_v4_for_VisualStudio.Models;
 using Markdig;
 using System;
 using System.Collections.Generic;
@@ -843,16 +843,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 match =>
                 {
                     string inner = match.Groups[1].Value;
-                    // 跳过空内容和过长内容
-                    if (string.IsNullOrWhiteSpace(inner) || inner.Length > 80)
+                    // 跳过空内容、过长内容，以及 <pre> 内部的 <code>（无语言标记的围栏代码块）
+                    if (string.IsNullOrWhiteSpace(inner) || inner.Length > 80
+                        || IsInsidePreTag(html, match.Index))
                         return match.Value;
 
                     // ── 检测文件名 ──
                     string ext = Path.GetExtension(inner);
-                    if (!string.IsNullOrEmpty(ext) && SourceFileExtensions.Contains(ext))
+                    string baseName = Path.GetFileNameWithoutExtension(inner);
+                    if (!string.IsNullOrEmpty(ext) && !string.IsNullOrWhiteSpace(baseName)
+                        && SourceFileExtensions.Contains(ext))
                     {
                         string encodedName = Uri.EscapeDataString(inner);
-                        string safeInner = EscapeHtmlAttribute(inner);
+                        string safeInner = EscapeHtmlAttributeSafe(inner);
                         string title = L.Format("chat.html.fileLinkTitle", safeInner);
                         return $"<code><a class=\"file-link\" href=\"vs-navigate://file?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
@@ -871,7 +874,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     if (isSymbol && symbolName.Length >= 3)
                     {
                         string encodedName = Uri.EscapeDataString(symbolName);
-                        string safeInner = EscapeHtmlAttribute(inner);
+                        string safeInner = EscapeHtmlAttributeSafe(inner);
                         string title = L.Format("chat.html.symbolLinkTitle", symbolName);
                         return $"<code><a class=\"symbol-link\" href=\"vs-navigate://symbol?name={encodedName}\" title=\"{title}\">{safeInner}</a></code>";
                     }
@@ -879,6 +882,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                     return match.Value;
                 },
                 RegexOptions.Singleline);
+        }
+        /// <summary>
+        /// 检查指定位置是否在 &lt;pre&gt; 标签内部（用于跳过代码块内的 &lt;code&gt;）。
+        /// </summary>
+        private static bool IsInsidePreTag(string html, int index)
+        {
+            string before = html.Substring(0, index);
+            int lastPreOpen = before.LastIndexOf("<pre>", StringComparison.Ordinal);
+            int lastPreClose = before.LastIndexOf("</pre>", StringComparison.Ordinal);
+            return lastPreOpen > lastPreClose;
         }
 
         #endregion
@@ -1244,6 +1257,15 @@ return "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'>" +
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
             return value.Replace("&", "&amp;").Replace("\"", "&quot;").Replace("'", "&#39;")
+                        .Replace("<", "&lt;").Replace(">", "&gt;");
+        }
+        /// <summary>
+        /// 转义 HTML 属性值中的引号字符（不重复转义 &amp;，用于已 HTML 安全的 inner 内容）。
+        /// </summary>
+        private static string EscapeHtmlAttributeSafe(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            return value.Replace("\"", "&quot;").Replace("'", "&#39;")
                         .Replace("<", "&lt;").Replace(">", "&gt;");
         }
 
