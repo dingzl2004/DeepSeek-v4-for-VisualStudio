@@ -1223,7 +1223,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     // 检测连续错误：检查本轮 tool 消息是否全部以 ❌ 开头
                     if (!loopDetected)
                     {
-                        int toolMsgStart = messages.Count - toolCalls.Count;
+                        // toolInsertPos 在插入 assistant + N 条 tool 后指向 agent 消息，
+                        // 故第一个 tool 消息位于 toolInsertPos - toolCalls.Count
+                        int toolMsgStart = toolInsertPos - toolCalls.Count;
                         bool allErrors = toolCalls.Count > 0;
                         for (int i = toolMsgStart; i < messages.Count && allErrors; i++)
                         {
