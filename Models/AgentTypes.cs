@@ -213,6 +213,13 @@ namespace DeepSeek_v4_for_VisualStudio.Models
         /// </summary>
         [JsonIgnore]
         public Action<string>? OnThinkingChunk { get; set; }
+
+        /// <summary>
+        /// 实时内容流回调。Agent 内部每收到一个 content chunk 时调用，
+        /// 供 UI 层实时流式更新消息正文。
+        /// </summary>
+        [JsonIgnore]
+        public Action<string>? OnContentChunk { get; set; }
     }
 
     /// <summary>

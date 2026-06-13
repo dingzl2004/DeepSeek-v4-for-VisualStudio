@@ -234,6 +234,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     onContent: (content) =>
                     {
                         fullContent += content;
+                        context.OnContentChunk?.Invoke(content);
                     },
                     onToolCall: (toolSummary) =>
                     {

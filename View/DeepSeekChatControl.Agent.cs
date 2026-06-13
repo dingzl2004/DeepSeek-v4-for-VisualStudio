@@ -1,4 +1,4 @@
-﻿using DeepSeek_v4_for_VisualStudio.Models;
+using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Services;
 using DeepSeek_v4_for_VisualStudio.Services.Agents;
 using DeepSeek_v4_for_VisualStudio.Utils;
@@ -390,6 +390,32 @@ namespace DeepSeek_v4_for_VisualStudio.View
                         }
                         catch { }
                     });
+                };
+
+                // ── 设置实时内容流回调：每个 content chunk 立即推送到 WebView2 消息正文 ──
+                context.OnContentChunk = (chunk) =>
+                {
+                    lock (_lock)
+                    {
+                        if (capturedMsgIdx >= 0 && capturedMsgIdx < _messages.Count)
+                            _messages[capturedMsgIdx].Content = (_messages[capturedMsgIdx].Content ?? "") + chunk;
+                    }
+                    string reasoning;
+                    string content;
+                    lock (_lock)
+                    {
+                        reasoning = _streamingReasoning.ToString();
+                        content = capturedMsgIdx >= 0 && capturedMsgIdx < _messages.Count
+                            ? (_messages[capturedMsgIdx]?.Content ?? "") : "";
+                    }
+                    _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                    {
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        if (ChatWebView.CoreWebView2 == null || capturedMsgIdx < 0) return;
+                        try { BatchStreamingUpdate(capturedMsgIdx, content, reasoning); }
+                        catch { }
+                    });
+
                 };
 
                 // ── 显式路由 Agent 切换：@agent 时切换到目标 Agent ──

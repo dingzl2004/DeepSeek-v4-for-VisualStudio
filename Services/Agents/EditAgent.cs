@@ -1,4 +1,4 @@
-﻿using DeepSeek_v4_for_VisualStudio.Models;
+using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Services;
 using DeepSeek_v4_for_VisualStudio.Services.EditTools;
 using DeepSeek_v4_for_VisualStudio.ToolWindows;
@@ -650,6 +650,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     {
                         thinkingBuilder.Append(thinking);
                         context.OnThinkingChunk?.Invoke(thinking);
+                    },
+                    onContent: (content) =>
+                    {
+                        context.OnContentChunk?.Invoke(content);
                     },
                     onToolCall: (toolSummary) =>
                     {

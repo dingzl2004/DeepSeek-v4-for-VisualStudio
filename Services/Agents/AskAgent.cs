@@ -154,6 +154,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         thinkingBuilder.Append(thinking);
                         context.OnThinkingChunk?.Invoke(thinking);
                     },
+                    onContent: (content) =>
+                    {
+                        context.OnContentChunk?.Invoke(content);
+                    },
                     onToolCall: (toolSummary) =>
                     {
                         AddLog("INFO", toolSummary);
