@@ -631,6 +631,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             bool loopDetected = false;
 
             int round = BuiltInTools?.CurrentRound ?? 0;
+
+            // ── 🔑 v1.1.11：固定后缀插入点，工具调用结果插入在 Agent 提示词之前 ──
+            // 消息结构：[0..3]prefix + [4..]历史 + [tool_calls...] + [agent] + [user]
+            // 工具循环中新增的 assistant/tool 消息插入到固定后缀之前，而非末尾。
+            // 这样 [agent] + [user] 始终保持在最后两个位置，前缀缓存不会因工具调用积累而漂移。
+            int toolInsertPos = Math.Max(0, messages.Count - 2);
             while (!loopDetected)
             {
                 round++;
@@ -984,13 +990,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         toolCallHistory.RemoveAt(0);
 
                     // ── 添加 assistant 消息（含工具调用）──
-                    messages.Add(new ChatApiMessage
+                    // 🔑 v1.1.11：插入到固定后缀之前，而非末尾追加
+                    messages.Insert(toolInsertPos, new ChatApiMessage
                     {
                         Role = "assistant",
                         Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : null,
                         ReasoningContent = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null,
                         ToolCalls = toolCalls
                     });
+                    toolInsertPos++;
 
                     // ── 同步 assistant 消息（含 tool_calls）到全局 ContextManager，确保重启后可恢复完整对话 ──
                     if (Context?.ContextManager != null)
@@ -1058,13 +1066,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         // ── 裁剪工具结果以保护上下文（与 ContextManager.AddToolResult 保持一致）──
                         string contextResult = CompactToolResultForAgent(tc.Function.Name, toolResult);
 
-                        messages.Add(new ChatApiMessage
+                        // ── 🔑 v1.1.11：插入到固定后缀之前，保持 [agent]+[user] 位置不变 ──
+                        messages.Insert(toolInsertPos, new ChatApiMessage
                         {
                             Role = "tool",
                             Content = contextResult,
                             ToolCallId = tc.Id,
                             Name = tc.Function.Name
                         });
+                        toolInsertPos++;
 
                         // ── 同步 tool 结果到全局 ContextManager，确保重启后可恢复完整对话 ──
                         if (Context?.ContextManager != null)
