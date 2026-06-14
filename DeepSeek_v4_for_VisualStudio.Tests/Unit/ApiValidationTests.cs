@@ -51,8 +51,9 @@ namespace DeepSeek_v4_for_VisualStudio.Tests.Unit
             msgs.Should().ContainSingle(m => m.Role == "assistant");
             var assistant = msgs.Find(m => m.Role == "assistant");
             assistant.Should().NotBeNull();
-            // 当存在 tool_calls 时，ReasoningContent 应当存在（即使为空字符串）
-            assistant!.ReasoningContent.Should().Be("");
+            // 当存在 tool_calls 时，ReasoningContent 原样保留（null 保持 null，不强制兜底 ""）
+            // v1.1.11：?? string.Empty 会将 null 转为 "" → JSON 多出字段 → 前缀缓存断裂
+            assistant!.ReasoningContent.Should().BeNull();
         }
 
         [Fact]

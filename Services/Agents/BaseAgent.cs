@@ -573,6 +573,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             if (!string.IsNullOrWhiteSpace(systemPrompt))
                 messages.Add(new ChatApiMessage { Role = "system", Content = systemPrompt });
 
+            // ── 第4.5层：易变上下文（Working Set + RAG，放在 Agent 指令之后）──
+            //     这些内容每轮都可能变（读不同文件、不同 query 的 RAG 结果），
+            //     放在消息末尾以最大化前面前缀缓存的命中范围。
+            if (ctxManager != null)
+            {
+                string? volatileBlock = ctxManager.BuildVolatileContextBlock();
+                if (!string.IsNullOrWhiteSpace(volatileBlock))
+                    messages.Add(new ChatApiMessage { Role = "system", Content = volatileBlock });
+            }
+
             // ── 第5层：当前用户消息（变化最大，放在最后）──
             messages.Add(new ChatApiMessage { Role = "user", Content = userPrompt });
 

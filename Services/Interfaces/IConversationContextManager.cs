@@ -1,7 +1,5 @@
 using DeepSeek_v4_for_VisualStudio.Models;
 using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace DeepSeek_v4_for_VisualStudio.Services
 {
@@ -36,7 +34,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         void SetRagContext(string? ragContext);
         void SetMemoryContext(string? memoryContext);
         void SetCompressor(ContextCompressorService? compressor);
-        void SetPrefixCache(PrefixCacheManager? prefixCache);
+        void SetActiveFileTracker(IActiveFileTracker? tracker);
+        void SetWorkspaceRoot(string? workspaceRoot);
 
         // ── 前缀冻结（v1.1.9 前缀缓存优化）──
         /// <summary>
@@ -51,7 +50,6 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
         // ── 消息管理 ──
         void AddUserMessage(string content);
-        Task AddUserMessageAsync(string content, CancellationToken cancellationToken = default);
         void AddAssistantMessage(string? content, string? reasoningContent = null, List<ToolCall>? toolCalls = null);
         void AddToolResult(string toolCallId, string toolName, string result);
         void AddCustomMessage(string role, string content);
@@ -60,6 +58,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         List<ChatApiMessage> BuildApiMessages();
         List<ChatApiMessage> BuildApiMessagesRecentTurns(int maxTurns);
         string GetDebugSummary();
+
+        /// <summary>
+        /// 构建易变上下文块（Working Set + RAG）。
+        /// 这些内容在同一会话内可能每轮都变，应放在消息数组末尾以保护前缀缓存。
+        /// 与 BuildDynamicContextBlock() 分离：后者包含稳定的内容（压缩摘要、搜索、记忆），
+        /// 始终占据 messages[2] 固定位置。
+        /// </summary>
+        string? BuildVolatileContextBlock();
 
         // ── Token 估算校准 ──
         /// <summary>

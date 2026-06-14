@@ -245,6 +245,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 // 所有非斜杠命令消息统一走 Agent 工作流（从 AskAgent 起始）
                 if (_activeAgent != null && _agentFactory != null && !string.IsNullOrEmpty(userText) && !userText.StartsWith("/"))
                 {
+                    // ── 确保系统提示词已初始化（新会话时 _fixedSystemPrompt 为 null，
+                    //     BuildRequestMessagesAsync 在上方未被调用，需在此处补做初始化）──
+                    await EnsureSystemPromptInitializedAsync();
+
                     // ── 预分类任务规模，Large 任务提前路由到 Plan Agent ──
                     var taskSize = Services.Agents.EditAgent.ClassifyTaskSize(userText);
                     Logger.Info($"[TaskSize] \"{userText.Truncate(60)}\" → {taskSize}");
@@ -374,70 +378,13 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 构建发送给 API 的消息列表，注入系统提示词、技能上下文、RAG 检索结果、搜索上下文。
+        /// 构建发送给 API 的消息列表。
+        /// 委托 InitializeSystemContextAsync 完成 prompt/skill/memory 初始化，
+        /// 此处只处理每轮可变的 RAG + 搜索上下文 + 统计。
         /// </summary>
         private async Task<List<ChatApiMessage>> BuildRequestMessagesAsync(string searchContext = "")
         {
-            // ── 惰性解析：确保 _solutionPath 在首次使用时已就绪 ──
-            // StartControl 中 ResolveSolutionPathAsync 是 fire-and-forget，
-            // 可能在首条消息发送时尚未完成。此处兜底保证路径已解析。
-            if (_solutionPath == null)
-            {
-                await ResolveSolutionPathAsync();
-            }
-
-            string systemPrompt = _options?.GetEffectiveSystemPrompt() ?? string.Empty;
-
-            if (_agentFactory != null)
-            {
-                string askAgentPrompt = _agentFactory.AskAgent?.Definition?.SystemPrompt ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(askAgentPrompt))
-                    systemPrompt = string.IsNullOrWhiteSpace(systemPrompt) ? askAgentPrompt : systemPrompt + "\n\n" + askAgentPrompt;
-                systemPrompt += "\n\n" + AiPrompts.MultiAgentSystemPromptFragment;
-            }
-
-            // ── 注入记忆系统使用指导 ──
-            systemPrompt += "\n\n" + AiPrompts.MemoryInstructionsFragment;
-
-            // ── 注入工作区路径信息，让 AI 知道项目根目录 ──
-            string workspaceRoot = _solutionPath ?? string.Empty;
-            Logger.Info($"[Workspace] 构建系统提示时 _solutionPath=[{_solutionPath ?? "(null)"}], workspaceRoot=[{workspaceRoot}]");
-            if (!string.IsNullOrEmpty(workspaceRoot))
-            {
-                // 如果是 .sln/.slnx 文件路径，取其目录
-                try
-                {
-                    if (File.Exists(workspaceRoot) && Path.GetExtension(workspaceRoot).StartsWith(".sln", StringComparison.OrdinalIgnoreCase))
-                        workspaceRoot = Path.GetDirectoryName(workspaceRoot) ?? workspaceRoot;
-                }
-                catch { }
-
-                string wsInfo = $"\n\n## 工作区信息\n当前工作区根目录: `{workspaceRoot}`\n所有文件操作请使用此目录下的 Windows 绝对路径。";
-                systemPrompt += wsInfo;
-            }
-
-            _contextManager.SetSystemPrompt(string.IsNullOrWhiteSpace(systemPrompt) ? null : systemPrompt);
-
-            string skillContext = string.Empty;
-            try
-            {
-                if (_skillDiscoveryResult == null)
-                    _skillDiscoveryResult = await SkillService.Instance.DiscoverSkillsAsync(_solutionPath);
-                skillContext = SkillService.Instance.GenerateSkillsDiscoveryContext(_skillDiscoveryResult);
-            }
-            catch (Exception ex) { Logger.Warn($"[Skill] 构建技能上下文失败: {ex.Message}"); }
-            _contextManager.SetSkillContext(string.IsNullOrWhiteSpace(skillContext) ? null : skillContext);
-
-            // ── 冻结不可变前缀（v1.1.9 缓存优化）──
-            //     将 system prompt + skill context 冻结为 messages[0]，
-            //     确保整个会话期间前缀不变，DeepSeek V4 自动前缀缓存可持续命中。
-            _contextManager.FreezeSystemPrompt();
-
-            if (!string.IsNullOrWhiteSpace(skillContext) && _skillDiscoveryResult != null)
-            {
-                var skillNames = string.Join(", ", _skillDiscoveryResult.AutoLoadableSkills.ConvertAll(s => s.Name));
-                Logger.Info($"[Skill] 系统提示注入: {_skillDiscoveryResult.AutoLoadableSkills.Count} 个 → {skillNames}");
-            }
+            await InitializeSystemContextAsync();
 
             if (_ragService != null && _ragService.IsEnabled && _options?.EnableRag == true)
             {
@@ -458,24 +405,6 @@ namespace DeepSeek_v4_for_VisualStudio.View
             }
 
             _contextManager.SetSearchContext(string.IsNullOrWhiteSpace(searchContext) ? null : searchContext);
-
-            // ── 注入记忆上下文（用户记忆 + 仓库记忆）──
-            try
-            {
-                if (_memoryService != null)
-                {
-                    string userMemory = _memoryService.GetMemoryContext(MemoryScope.User);
-                    string repoMemory = _memoryService.GetMemoryContext(MemoryScope.Repo, solutionPath: _solutionPath);
-                    var memoryContext = new System.Text.StringBuilder();
-                    if (!string.IsNullOrWhiteSpace(userMemory))
-                        memoryContext.AppendLine(userMemory);
-                    if (!string.IsNullOrWhiteSpace(repoMemory))
-                        memoryContext.AppendLine(repoMemory);
-                    string combined = memoryContext.ToString().Trim();
-                    _contextManager.SetMemoryContext(string.IsNullOrWhiteSpace(combined) ? null : combined);
-                }
-            }
-            catch (Exception ex) { Logger.Warn($"[Memory] 记忆上下文注入失败: {ex.Message}"); }
 
             if (_options?.ShowContextStats == true || _contextManager.UsageRatio > 0.7)
             {

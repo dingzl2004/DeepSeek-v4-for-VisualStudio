@@ -126,81 +126,91 @@ namespace DeepSeek_v4_for_VisualStudio.View
         }
 
         /// <summary>
-        /// 恢复系统级上下文（system prompt / memory / skill / RAG）。
+        /// 确保系统提示词已初始化（幂等）。
+        /// 新会话首次 Agent 调用时 _fixedSystemPrompt 尚未冻结，此处补做初始化。
+        /// Session 恢复和 Retry 流程中 RestoreSystemContextAsync 已处理，此方法直接返回。
+        /// </summary>
+        private async Task EnsureSystemPromptInitializedAsync()
+        {
+            if (!string.IsNullOrEmpty(_contextManager?.GetFixedSystemPrompt()))
+                return;
+
+            await RestoreSystemContextAsync();
+        }
+
+        /// <summary>
+        /// 共享系统上下文初始化：组装 system prompt、发现 skill、冻结前缀、注入记忆。
+        /// BuildRequestMessagesAsync（主流程）和 RestoreSystemContextAsync（Agent 恢复/重试）共用此逻辑。
+        /// RAG 和搜索上下文不在其中 —— 它们每轮都可能变化，由 BuildRequestMessagesAsync 单独处理。
+        /// </summary>
+        private async Task InitializeSystemContextAsync()
+        {
+            if (_solutionPath == null)
+                await ResolveSolutionPathAsync();
+
+            string systemPrompt = _options?.GetEffectiveSystemPrompt() ?? string.Empty;
+            if (_agentFactory != null)
+                systemPrompt += "\n\n" + AiPrompts.MultiAgentSystemPromptFragment;
+            systemPrompt += "\n\n" + AiPrompts.MemoryInstructionsFragment;
+
+            string workspaceRoot = _solutionPath ?? string.Empty;
+            if (!string.IsNullOrEmpty(workspaceRoot))
+            {
+                try
+                {
+                    if (File.Exists(workspaceRoot) && Path.GetExtension(workspaceRoot).StartsWith(".sln", StringComparison.OrdinalIgnoreCase))
+                        workspaceRoot = Path.GetDirectoryName(workspaceRoot) ?? workspaceRoot;
+                }
+                catch { }
+                systemPrompt += $"\n\n## 工作区信息\n当前工作区根目录: `{workspaceRoot}`\n所有文件操作请使用此目录下的 Windows 绝对路径。";
+            }
+
+            _contextManager.SetSystemPrompt(string.IsNullOrWhiteSpace(systemPrompt) ? null : systemPrompt);
+
+            try
+            {
+                if (_skillDiscoveryResult == null)
+                    _skillDiscoveryResult = await SkillService.Instance.DiscoverSkillsAsync(_solutionPath);
+                string skillContext = SkillService.Instance.GenerateSkillsDiscoveryContext(_skillDiscoveryResult);
+                _contextManager.SetSkillContext(string.IsNullOrWhiteSpace(skillContext) ? null : skillContext);
+
+                if (!string.IsNullOrWhiteSpace(skillContext) && _skillDiscoveryResult != null)
+                {
+                    var skillNames = string.Join(", ", _skillDiscoveryResult.AutoLoadableSkills.ConvertAll(s => s.Name));
+                    Logger.Info($"[Skill] 系统提示注入: {_skillDiscoveryResult.AutoLoadableSkills.Count} 个 → {skillNames}");
+                }
+            }
+            catch (Exception ex) { Logger.Warn($"[Skill] 上下文初始化失败: {ex.Message}"); }
+
+            _contextManager.FreezeSystemPrompt();
+
+            try
+            {
+                if (_memoryService != null)
+                {
+                    string userMemory = _memoryService.GetMemoryContext(MemoryScope.User);
+                    string repoMemory = _memoryService.GetMemoryContext(MemoryScope.Repo, solutionPath: _solutionPath);
+                    var memoryContext = new StringBuilder();
+                    if (!string.IsNullOrWhiteSpace(userMemory))
+                        memoryContext.AppendLine(userMemory);
+                    if (!string.IsNullOrWhiteSpace(repoMemory))
+                        memoryContext.AppendLine(repoMemory);
+                    string combined = memoryContext.ToString().Trim();
+                    _contextManager.SetMemoryContext(string.IsNullOrWhiteSpace(combined) ? null : combined);
+                }
+            }
+            catch (Exception ex) { Logger.Warn($"[Memory] 上下文初始化失败: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 恢复系统级上下文（system prompt / memory / skill）。
         /// 在 RebuildContextFromTree() 后调用，因为 Clear() 会清空这些字段。
-        /// 确保 Agent（Plan/Edit/Explore）在编辑/重试后仍能获取完整的系统上下文。
         /// </summary>
         private async Task RestoreSystemContextAsync()
         {
             try
             {
-                // ── 惰性解析：确保 _solutionPath 已就绪 ──
-                if (_solutionPath == null)
-                {
-                    await ResolveSolutionPathAsync();
-                }
-
-                // ── 系统提示词 ──
-                string systemPrompt = _options?.GetEffectiveSystemPrompt() ?? string.Empty;
-                if (_agentFactory != null)
-                {
-                    string askAgentPrompt = _agentFactory.AskAgent.Definition.SystemPrompt;
-                    if (!string.IsNullOrWhiteSpace(askAgentPrompt))
-                        systemPrompt = string.IsNullOrWhiteSpace(systemPrompt) ? askAgentPrompt : systemPrompt + "\n\n" + askAgentPrompt;
-                    systemPrompt += "\n\n" + AiPrompts.MultiAgentSystemPromptFragment;
-                }
-
-                // ── 注入记忆系统使用指导 ──
-                systemPrompt += "\n\n" + AiPrompts.MemoryInstructionsFragment;
-
-                string workspaceRoot = _solutionPath ?? string.Empty;
-                if (!string.IsNullOrEmpty(workspaceRoot))
-                {
-                    try
-                    {
-                        if (File.Exists(workspaceRoot) && Path.GetExtension(workspaceRoot).StartsWith(".sln", StringComparison.OrdinalIgnoreCase))
-                            workspaceRoot = Path.GetDirectoryName(workspaceRoot) ?? workspaceRoot;
-                    }
-                    catch { }
-                    string wsInfo = $"\n\n## 工作区信息\n当前工作区根目录: `{workspaceRoot}`\n所有文件操作请使用此目录下的 Windows 绝对路径。";
-                    systemPrompt += wsInfo;
-                }
-
-                _contextManager.SetSystemPrompt(string.IsNullOrWhiteSpace(systemPrompt) ? null : systemPrompt);
-
-                // ── Skill 上下文 ──
-                try
-                {
-                    if (_skillDiscoveryResult == null)
-                        _skillDiscoveryResult = await SkillService.Instance.DiscoverSkillsAsync(_solutionPath);
-                    string skillContext = SkillService.Instance.GenerateSkillsDiscoveryContext(_skillDiscoveryResult);
-                    _contextManager.SetSkillContext(string.IsNullOrWhiteSpace(skillContext) ? null : skillContext);
-                }
-                catch (Exception ex) { Logger.Warn($"[Skill] RestoreSystemContext 失败: {ex.Message}"); }
-
-                // ── 冻结不可变前缀（v1.1.9 缓存优化）──
-                //     将 system prompt + skill context 冻结为 messages[0]，
-                //     确保整个会话期间前缀不变，DeepSeek V4 自动前缀缓存可持续命中。
-                _contextManager.FreezeSystemPrompt();
-
-                // ── 记忆上下文 ──
-                try
-                {
-                    if (_memoryService != null)
-                    {
-                        string userMemory = _memoryService.GetMemoryContext(MemoryScope.User);
-                        string repoMemory = _memoryService.GetMemoryContext(MemoryScope.Repo, solutionPath: _solutionPath);
-                        var memoryContext = new StringBuilder();
-                        if (!string.IsNullOrWhiteSpace(userMemory))
-                            memoryContext.AppendLine(userMemory);
-                        if (!string.IsNullOrWhiteSpace(repoMemory))
-                            memoryContext.AppendLine(repoMemory);
-                        string combined = memoryContext.ToString().Trim();
-                        _contextManager.SetMemoryContext(string.IsNullOrWhiteSpace(combined) ? null : combined);
-                    }
-                }
-                catch (Exception ex) { Logger.Warn($"[Memory] RestoreSystemContext 失败: {ex.Message}"); }
-
+                await InitializeSystemContextAsync();
                 Logger.Info("[SystemContext] 系统级上下文已恢复 (systemPrompt + skill + memory)");
             }
             catch (Exception ex)

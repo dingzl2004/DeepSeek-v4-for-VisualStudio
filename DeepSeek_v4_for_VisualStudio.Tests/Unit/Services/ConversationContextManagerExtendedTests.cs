@@ -347,50 +347,6 @@ public class ConversationContextManagerExtendedTests
 
     #endregion
 
-    #region Clone
-
-    [Fact]
-    public void Clone_CreatesIndependentCopy()
-    {
-        _manager.SetSystemPrompt("Original prompt");
-        _manager.SetSearchContext("Original search");
-        _manager.AddUserMessage("Q1");
-
-        var clone = _manager.Clone();
-
-        // 克隆应有相同的消息
-        clone.MessageCount.Should().Be(_manager.MessageCount);
-        clone.TurnCount.Should().Be(_manager.TurnCount);
-
-        // 修改克隆不应影响原始
-        clone.AddUserMessage("Q2");
-        clone.TurnCount.Should().Be(2);
-        _manager.TurnCount.Should().Be(1);
-    }
-
-    [Fact]
-    public void Clone_InheritsTokenBudget()
-    {
-        _manager.TokenBudget = 500_000;
-
-        var clone = _manager.Clone();
-
-        clone.TokenBudget.Should().Be(500_000);
-    }
-
-    [Fact]
-    public void Clone_InheritsCompressor()
-    {
-        var compressor = new ContextCompressorService();
-        _manager.SetCompressor(compressor);
-
-        var clone = _manager.Clone();
-
-        clone.Compressor.Should().BeSameAs(compressor);
-    }
-
-    #endregion
-
     #region TrimAfter
 
     [Fact]
@@ -432,52 +388,6 @@ public class ConversationContextManagerExtendedTests
         _manager.TrimAfter(1);
 
         _manager.EstimatedTokens.Should().BeLessThan(tokensBefore);
-    }
-
-    #endregion
-
-    #region TrimAfterLastUserMessage
-
-    [Fact]
-    public void TrimAfterLastUserMessage_RemovesAfterLastUser()
-    {
-        _manager.AddUserMessage("Q1");
-        _manager.AddAssistantMessage("A1");
-        _manager.AddUserMessage("Q2");
-        _manager.AddAssistantMessage("A2");
-
-        _manager.TrimAfterLastUserMessage();
-
-        // Q2 是最后一个 user 消息，应从 Q2 开始截断
-        // 实际上 TrimAfterLastUserMessage 保留 Q2 之前的内容
-        _manager.MessageCount.Should().Be(2); // Q1, A1
-    }
-
-    [Fact]
-    public void TrimAfterLastUserMessage_WithCustomMessages_RemovesThem()
-    {
-        _manager.AddCustomMessage("system", "Skill instruction");
-        _manager.AddUserMessage("Q1");
-        _manager.AddAssistantMessage("A1");
-
-        _manager.MessageCount.Should().Be(3);
-
-        _manager.TrimAfterLastUserMessage();
-
-        // Custom messages (TurnIndex=-1) should be removed
-        var messages = _manager.BuildApiMessages();
-        messages.Should().NotContain(m => m.Content!.Contains("Skill instruction"));
-    }
-
-    [Fact]
-    public void TrimAfterLastUserMessage_NoUserMessage_DoesNothing()
-    {
-        _manager.AddCustomMessage("system", "Instruction");
-
-        _manager.TrimAfterLastUserMessage();
-
-        // 没有 user 消息，不做任何操作
-        // Custom message 可能被移除
     }
 
     #endregion
@@ -717,14 +627,23 @@ public class ConversationContextManagerExtendedTests
     {
         _manager.SetSystemPrompt("You are helpful.");
         _manager.SetSearchContext("Web search results");
-        _manager.SetRagContext("RAG context from database");
         _manager.AddUserMessage("Query");
 
         var messages = _manager.BuildApiMessages();
 
         messages.Should().Contain(m => m.Role == "system" && m.Content!.Contains("You are helpful"));
         messages.Should().Contain(m => m.Role == "system" && m.Content!.Contains("Web search results"));
-        messages.Should().Contain(m => m.Role == "system" && m.Content!.Contains("RAG context from database"));
+    }
+
+    [Fact]
+    public void BuildVolatileContextBlock_IncludesRagContext()
+    {
+        _manager.SetRagContext("RAG context from database");
+
+        var volatileBlock = _manager.BuildVolatileContextBlock();
+
+        volatileBlock.Should().NotBeNull();
+        volatileBlock!.Should().Contain("RAG context from database");
     }
 
     #endregion

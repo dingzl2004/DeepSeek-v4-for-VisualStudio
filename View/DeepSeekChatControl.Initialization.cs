@@ -144,6 +144,25 @@ namespace DeepSeek_v4_for_VisualStudio.View
                 _ragService?.DeactivateProvider();
                 _ragService = null;
             }
+
+            // ── 注入 ActiveFileTracker 到 ContextManager（Working Set 追踪）──
+            if (_builtInToolService?.ActiveFileTracker != null)
+            {
+                _contextManager.SetActiveFileTracker(_builtInToolService.ActiveFileTracker);
+            }
+
+            // ── 注入工作区根目录（用于 Working Set 相对路径生成）──
+            if (!string.IsNullOrWhiteSpace(_solutionPath))
+            {
+                string wsRoot = _solutionPath;
+                try
+                {
+                    if (File.Exists(wsRoot) && Path.GetExtension(wsRoot).StartsWith(".sln", StringComparison.OrdinalIgnoreCase))
+                        wsRoot = Path.GetDirectoryName(wsRoot) ?? wsRoot;
+                }
+                catch { }
+                _contextManager.SetWorkspaceRoot(wsRoot);
+            }
         }
 
         /// <summary>
