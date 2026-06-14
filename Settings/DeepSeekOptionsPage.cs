@@ -228,6 +228,16 @@ namespace DeepSeek_v4_for_VisualStudio.Settings
         public string Language { get; set; } = "auto";
 
         // ═══════════════════════════════════════════════
+        //  Agent 行为设置
+        // ═══════════════════════════════════════════════
+
+        [LocalizedCategory("settings.category.agent")]
+        [LocalizedDisplayName("settings.maxToolCallRounds.displayName")]
+        [LocalizedDescription("settings.maxToolCallRounds.description")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
+        public int MaxToolCallRounds { get; set; } = 200;
+
+        // ═══════════════════════════════════════════════
         //  审批模式设置
         // ═══════════════════════════════════════════════
 

@@ -650,7 +650,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             int consecutiveErrorRounds = 0;
             const int maxRepeatedSameCall = 5;    // 同一调用最多重复 5 次
             const int maxConsecutiveErrors = 5;
-            const int safetyLimit = 200;
+            int safetyLimit = Settings.DeepSeekOptionsPage.Instance?.MaxToolCallRounds ?? 200;
+            if (safetyLimit < 1) safetyLimit = 200;
             bool loopDetected = false;
 
             int round = BuiltInTools?.CurrentRound ?? 0;
