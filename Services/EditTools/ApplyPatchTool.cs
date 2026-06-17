@@ -479,23 +479,15 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             string reconstructed = ReconstructFile(fileLines, chunks.Select(c => c.chunk).ToList());
             result.FinalContent = EditStringMatcher.NormalizeToCrLf(reconstructed);
 
-            // ── 事后花括号平衡校验（防御 AI patch 误匹配导致的结构损坏）──
-            // 复用已有的 ValidateStructureIntegrity，覆盖静态 ApplySinglePatch 路径
-            var finalLines = result.FinalContent.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-            int editMin = result.AppliedEdits.Count > 0 ? result.AppliedEdits.Min(e => e.StartLine) : 0;
-            int editMax = result.AppliedEdits.Count > 0 ? result.AppliedEdits.Max(e => e.EndLine) : 0;
-            var structureErrors = EditStringMatcher.ValidateStructureIntegrity(
-                result.FinalContent, editMin, editMax, fileLines);
-            if (structureErrors.Count > 0)
-            {
-                result.Success = false;
-                result.ErrorMessage = $"结构完整性校验失败 ({Path.GetFileName(filePath)}):\n  " +
-                    string.Join("\n  ", structureErrors);
-                Logger.LogToFile("applypatch", $"[ApplyPatch] ❌ 结构校验失败: {result.ErrorMessage}");
-                return result;
-            }
+            // ── v1.1.11: 移除此处重复的结构完整性校验。
+            //     括号匹配检查已在 EditAgent.编辑后健全性检查 (行 ~909) 中统一完成，
+            //     此处的预写校验会产生误报并阻止合法编辑。
 
             result.Success = true;
+
+            // ── v1.1.11: 记录 patch 原文 + hunk 概要（诊断用）──
+            LogPatchDetails(filePath, fileContent, result.FinalContent,
+                result.AppliedEdits, patch);
 
             // ── 日志：记录应用前后的内容（前后各 10 行上下文）──
             LogAppliedChanges(filePath, fileContent, result.FinalContent, result.AppliedEdits);
@@ -1228,18 +1220,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             try
             {
                 string diskContent = File.ReadAllText(filePath);
-                var baselineLines = writtenContent.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
 
-                int minLine = appliedEdits.Min(e => e.StartLine);
-                int maxLine = appliedEdits.Max(e => e.EndLine);
-
-                var errors = EditStringMatcher.ValidateStructureIntegrity(
-                    diskContent, minLine, maxLine, baselineLines);
-
+                // ── v1.1.11: 仅校验磁盘写入一致性，结构完整性检查交由
+                //     EditAgent.编辑后健全性检查统一处理，避免重复校验。
                 if (!string.Equals(writtenContent, diskContent, StringComparison.Ordinal))
-                    errors.Add("磁盘内容与预期输出不一致（可能存在并发写入）");
+                    return new List<string> { "磁盘内容与预期输出不一致（可能存在并发写入）" };
 
-                return errors.Count > 0 ? errors : null;
+                return null;
             }
             catch (Exception ex)
             {
@@ -1508,6 +1495,44 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             catch (Exception ex)
             {
                 Logger.LogToFile("applypatch", $"[ApplyPatch] 记录应用变更时出错: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// v1.1.11: 记录原始 patch 内容和解析后的 hunk 详情（用于诊断）。
+        /// 注意：before/after 上下文由 LogAppliedChanges 负责，此处不重复。
+        /// </summary>
+        private static void LogPatchDetails(string filePath, string beforeContent,
+            string afterContent, List<TextEditOperation> appliedEdits, PatchOperation patch)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"[ApplyPatch] 📝 {Path.GetFileName(filePath)} — Patch 详情 ({patch.Hunks.Count} hunks)");
+
+                // ── 1. 原始 Patch 内容 ──
+                sb.AppendLine($"  ── 原始 Patch ({patch.RawText?.Length ?? 0} 字符) ──");
+                sb.AppendLine(patch.RawText ?? "(空)");
+
+                // ── 2. 解析后的 Hunks 概要 ──
+                sb.AppendLine($"  ── 解析后的 Hunks ({patch.Hunks.Count} 个) ──");
+                for (int hi = 0; hi < patch.Hunks.Count; hi++)
+                {
+                    var hunk = patch.Hunks[hi];
+                    int ctxCount = hunk.Lines.Count(l => l.Type == ' ');
+                    int delCount = hunk.Lines.Count(l => l.Type == '-');
+                    int insCount = hunk.Lines.Count(l => l.Type == '+');
+                    sb.AppendLine($"    Hunk[{hi}]: 上下文={ctxCount}, 删除={delCount}, 插入={insCount}");
+                    if (hunk.ContextMarkers != null && hunk.ContextMarkers.Count > 0)
+                        sb.AppendLine($"      @@: {string.Join(" | ", hunk.ContextMarkers)}");
+                    sb.AppendLine(hunk.RawText ?? string.Empty);
+                }
+
+                Logger.LogToFile("applypatch", sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Logger.LogToFile("applypatch", $"[ApplyPatch] 记录 Patch 详情时出错: {ex.Message}");
             }
         }
 

@@ -809,20 +809,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     case EditOperationType.ApplyPatch:
                         // ── 方法1：apply_patch ──
                         await ExecutePatchEditsAsync(result, plan, context, workspaceRoot,
-                            originalContents, appliedResults, ct);
+                            originalContents, appliedResults, ct, toolHandledFiles);
                         break;
 
                     case EditOperationType.InsertEditIntoFile:
                         // ── 方法2：insert_edit_into_file ──
                         await ExecuteInsertEditsAsync(result, plan, context, workspaceRoot,
-                            originalContents, appliedResults, ct);
+                            originalContents, appliedResults, ct, toolHandledFiles);
                         break;
 
                     case EditOperationType.CreateFile:
                     default:
                         // ── 方法3：create_file（原有逻辑）──
                         await ExecuteCreateFileEditsAsync(result, plan, context, workspaceRoot,
-                            originalContents, appliedResults, ct);
+                            originalContents, appliedResults, ct, toolHandledFiles);
                         break;
                 }
 
@@ -1300,7 +1300,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             string workspaceRoot,
             Dictionary<string, string> originalContents,
             List<EditApplyResult> appliedResults,
-            CancellationToken ct)
+            CancellationToken ct,
+            HashSet<string>? toolHandledFiles = null)
         {
             if (_applyPatchTool == null)
             {
@@ -1310,6 +1311,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             var patches = ApplyPatchTool.ParsePatches(aiResult);
             AddLog("INFO", string.Format(LocalizationService.Instance["agent.log.parsedPatches"], patches.Count));
+
+            // ── v1.1.11: 检测并告警与工具编辑重叠的文件，但不跳过（支持同一文件多次编辑）──
+            if (toolHandledFiles != null && toolHandledFiles.Count > 0)
+            {
+                var overlapFiles = patches
+                    .Select(p => EditPatchService.ResolvePath(p.FilePath, workspaceRoot))
+                    .Where(p => toolHandledFiles.Contains(p))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (overlapFiles.Count > 0)
+                {
+                    AddLog("WARN", $"[EditAgent] ApplyPatch 目标中有 {overlapFiles.Count} 个文件已被工具编辑过（将基于工具编辑后的内容应用补丁）: {string.Join(", ", overlapFiles.Select(Path.GetFileName))}");
+                }
+            }
 
             // ── 项目文件审批：在执行前检查所有 patch 目标，对项目文件请求用户确认 ──
             var approvedPatches = new List<PatchOperation>();
@@ -1425,7 +1440,8 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             string workspaceRoot,
             Dictionary<string, string> originalContents,
             List<EditApplyResult> appliedResults,
-            CancellationToken ct)
+            CancellationToken ct,
+            HashSet<string>? toolHandledFiles = null)
         {
             if (_insertEditTool == null)
             {
@@ -1435,6 +1451,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
 
             var insertEdits = InsertEditTool.ParseInsertEdits(aiResult);
             AddLog("INFO", LocalizationService.Instance.Format("agent.log.editInsertEditsParsed", insertEdits.Count));
+
+            // ── v1.1.11: 检测并告警与工具编辑重叠的文件，但不跳过（支持同一文件多次编辑）──
+            if (toolHandledFiles != null && toolHandledFiles.Count > 0)
+            {
+                var overlapFiles = insertEdits
+                    .Select(e => EditPatchService.ResolvePath(e.FilePath, workspaceRoot))
+                    .Where(p => toolHandledFiles.Contains(p))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (overlapFiles.Count > 0)
+                {
+                    AddLog("WARN", $"[EditAgent] InsertEdit 目标中有 {overlapFiles.Count} 个文件已被工具编辑过（将基于工具编辑后的内容应用编辑）: {string.Join(", ", overlapFiles.Select(Path.GetFileName))}");
+                }
+            }
 
             // ── 排序：项目配置优先，构建定义文件最后 ──
             var sortedEdits = insertEdits
@@ -1549,9 +1579,24 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
             string workspaceRoot,
             Dictionary<string, string> originalContents,
             List<EditApplyResult> appliedResults,
-            CancellationToken ct)
+            CancellationToken ct,
+            HashSet<string>? toolHandledFiles = null)
         {
             var changes = ParseCodeChangesFromResult(aiResult);
+
+            // ── v1.1.11: 检测并告警与工具编辑重叠的文件，但不跳过（支持同一文件多次编辑）──
+            if (toolHandledFiles != null && toolHandledFiles.Count > 0)
+            {
+                var overlapFiles = changes
+                    .Select(c => ResolveFilePath(c.FilePath, context.SolutionPath))
+                    .Where(p => toolHandledFiles.Contains(p))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (overlapFiles.Count > 0)
+                {
+                    AddLog("WARN", $"[EditAgent] CreateFile 目标中有 {overlapFiles.Count} 个文件已被工具编辑过（将基于工具编辑后的内容写入）: {string.Join(", ", overlapFiles.Select(Path.GetFileName))}");
+                }
+            }
 
             // ── 排序：项目配置优先（避免 VS 冲突对话框），构建定义文件最后（CMakeLists.txt 必须在源文件后写入）──
             var sortedChanges = changes
@@ -1992,19 +2037,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     continue;
                 }
 
-                // ── 保存原始内容（如果文件存在且尚未保存）──
-                if (fileExists && !originalContents.ContainsKey(resolvedPath))
-                {
-                    try
-                    {
-                        string original = await Task.Run(() => File.ReadAllText(resolvedPath), ct);
-                        originalContents[resolvedPath] = original;
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Warn($"[EditAgent] 无法读取原始内容用于 diff: {resolvedPath} - {ex.Message}");
-                    }
-                }
+                // ── v1.1.11: 工具编辑已在磁盘生效，此时无法获取真正的原始内容。
+                //     不设置 originalContents（留待后续文本编辑路径读取当前状态作为基线），
+                //     避免 diff 计算时 original==final 导致变更量归零。
+                //     仅对新文件设置空原始内容。
 
                 // ── 新文件处理：添加到项目 ──
                 if (isNewFile && fileExists)
@@ -2031,28 +2067,20 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 if (!plan.ChangedFiles.Any(c => string.Equals(c.FilePath, resolvedPath, StringComparison.OrdinalIgnoreCase)))
                 {
                     int added = 0, removed = 0;
-                    if (originalContents.TryGetValue(resolvedPath, out string? orig) && fileExists)
+                    if (isNewFile || !fileExists)
                     {
-                        try
-                        {
-                            string final = await Task.Run(() => File.ReadAllText(resolvedPath), ct);
-                            CountDiffLines(orig, final, out added, out removed);
-                        }
-                        catch { added = 1; }
+                        added = 1; // 新文件或异常情况
                     }
-                    else if (fileExists)
+                    else
                     {
-                        // 工具修改了已存在的文件但没有原始内容（原始未保存），读取最终内容统计行数
+                        // 工具修改了已存在的文件，无法获取原始内容做精确 diff，
+                        // 使用最终文件行数作为变更量估算
                         try
                         {
                             string content = await Task.Run(() => File.ReadAllText(resolvedPath), ct);
                             added = CountLines(content);
                         }
                         catch { added = 1; }
-                    }
-                    else
-                    {
-                        added = 1; // 文件被删除或其他异常情况
                     }
 
                     plan.ChangedFiles.Add(new FileChangeSummary

@@ -657,72 +657,93 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         /// <param name="editEndLine">编辑结束行（0-based）</param>
         /// <param name="originalLines">原始文件行数组（用于对比基线）</param>
         /// <returns>问题描述列表，为空表示通过</returns>
+        /// <remarks>
+        /// v1.1.11: 改为全文件括号净变化检查。
+        /// 旧版在 ±20 行窗口内做 bracket stack 配对，但代码块（函数/类/命名空间）
+        /// 常跨越数百行，窗口内配对检查会产生大量误报（如函数体的 { 和文件尾的 }）。
+        /// 新版对比编辑前后全文件的括号总数：编辑区域外的内容未修改，括号数量不变，
+        /// 因此全文件括号总数的净变化即编辑操作引入的变化量，Δ≠0 说明编辑破坏了平衡。
+        /// </remarks>
         public static List<string> ValidateStructureIntegrity(
             string content, int editStartLine, int editEndLine, string[] originalLines)
         {
             var errors = new List<string>();
             var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
 
-            int checkStart = Math.Max(0, editStartLine - 20);
-            int checkEnd = Math.Min(lines.Length - 1, editEndLine + 20);
+            // ── 全文件括号净变化检查 ──
+            // 编辑区域前后的代码未经修改，括号数量应与原始一致。
+            // 全文件括号总数的净变化即为编辑操作引入的变化量。
+            // 一次性遍历，统计所有括号类型。
+            int origCurlyOpen = 0, origCurlyClose = 0;
+            int origParenOpen = 0, origParenClose = 0;
+            int origSquareOpen = 0, origSquareClose = 0;
 
-            var bracketStack = new Stack<(char bracket, int line)>();
-            for (int i = checkStart; i <= checkEnd && i < lines.Length; i++)
+            foreach (var line in originalLines)
             {
-                foreach (char ch in lines[i])
+                foreach (char ch in line)
                 {
                     switch (ch)
                     {
-                        case '{':
-                            bracketStack.Push(('{', i));
-                            break;
-                        case '}':
-                            if (bracketStack.Count == 0 || bracketStack.Peek().bracket != '{')
-                                errors.Add($"行 {i + 1}: 多余的 '}}' 闭合符号（缺少对应的 '{{'）");
-                            else
-                                bracketStack.Pop();
-                            break;
-                        case '(':
-                            bracketStack.Push(('(', i));
-                            break;
-                        case ')':
-                            if (bracketStack.Count > 0 && bracketStack.Peek().bracket == '(')
-                                bracketStack.Pop();
-                            else
-                                errors.Add($"行 {i + 1}: 可能多余的 ')' 闭合符号");
-                            break;
-                        case '[':
-                            bracketStack.Push(('[', i));
-                            break;
-                        case ']':
-                            if (bracketStack.Count > 0 && bracketStack.Peek().bracket == '[')
-                                bracketStack.Pop();
-                            else
-                                errors.Add($"行 {i + 1}: 可能多余的 ']' 闭合符号");
-                            break;
+                        case '{': origCurlyOpen++; break;
+                        case '}': origCurlyClose++; break;
+                        case '(': origParenOpen++; break;
+                        case ')': origParenClose++; break;
+                        case '[': origSquareOpen++; break;
+                        case ']': origSquareClose++; break;
                     }
                 }
             }
-            foreach (var (bracket, line) in bracketStack)
-                errors.Add($"行 {line + 1}: '{bracket}' 没有对应的闭合符号");
 
-            int windowBraceDelta = CountBracesInRange(lines, checkStart, checkEnd) -
-                                   CountBracesInRange(originalLines,
-                                       Math.Min(checkStart, originalLines.Length - 1),
-                                       Math.Min(checkEnd, originalLines.Length - 1));
-            if (Math.Abs(windowBraceDelta) > 3)
-                errors.Add($"编辑窗口内括号数量变化较大 (Δ={windowBraceDelta})，请人工确认");
+            int modCurlyOpen = 0, modCurlyClose = 0;
+            int modParenOpen = 0, modParenClose = 0;
+            int modSquareOpen = 0, modSquareClose = 0;
+
+            foreach (var line in lines)
+            {
+                foreach (char ch in line)
+                {
+                    switch (ch)
+                    {
+                        case '{': modCurlyOpen++; break;
+                        case '}': modCurlyClose++; break;
+                        case '(': modParenOpen++; break;
+                        case ')': modParenClose++; break;
+                        case '[': modSquareOpen++; break;
+                        case ']': modSquareClose++; break;
+                    }
+                }
+            }
+
+            // ── 花括号：结构性最强，净变化必须为 0 ──
+            int curlyOpenDelta = modCurlyOpen - origCurlyOpen;
+            int curlyCloseDelta = modCurlyClose - origCurlyClose;
+            if (curlyOpenDelta != curlyCloseDelta)
+            {
+                errors.Add($"花括号净变化不平衡: +{curlyOpenDelta} '{{', +{curlyCloseDelta} '}}' (净差={curlyOpenDelta - curlyCloseDelta})");
+            }
+            else if (Math.Abs(curlyOpenDelta) > 10)
+            {
+                // 平衡但变化较大（如新增整个函数），给出提示
+                errors.Add($"花括号变化量较大 ({{ {curlyOpenDelta:+0;-0}, }} {curlyCloseDelta:+0;-0})，请人工确认结构完整性");
+            }
+
+            // ── 圆括号：可能出现在字符串/注释中，作为软告警 ──
+            int parenOpenDelta = modParenOpen - origParenOpen;
+            int parenCloseDelta = modParenClose - origParenClose;
+            if (parenOpenDelta != parenCloseDelta && Math.Abs(parenOpenDelta - parenCloseDelta) > 2)
+            {
+                errors.Add($"圆括号净变化不平衡: +{parenOpenDelta} '(', +{parenCloseDelta} ')'（可能是误报，请人工确认）");
+            }
+
+            // ── 方括号：同样作为软告警 ──
+            int squareOpenDelta = modSquareOpen - origSquareOpen;
+            int squareCloseDelta = modSquareClose - origSquareClose;
+            if (squareOpenDelta != squareCloseDelta && Math.Abs(squareOpenDelta - squareCloseDelta) > 2)
+            {
+                errors.Add($"方括号净变化不平衡: +{squareOpenDelta} '[', +{squareCloseDelta} ']'（可能是误报，请人工确认）");
+            }
 
             return errors;
-        }
-
-        private static int CountBracesInRange(string[] lines, int start, int end)
-        {
-            int count = 0;
-            for (int i = Math.Max(0, start); i <= end && i < lines.Length; i++)
-                foreach (char ch in lines[i])
-                    if (ch == '{' || ch == '}') count++;
-            return count;
         }
 
         #endregion
