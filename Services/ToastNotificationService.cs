@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -27,9 +28,19 @@ namespace DeepSeek_v4_for_VisualStudio.Services
 
         private static readonly string ShortcutPath = Path.Combine(ShortcutDirectory, ShortcutName);
 
+        /// <summary>
+        /// 用户点击 Toast 通知时触发。订阅者应在 UI 线程上处理（如打开工具窗口）。
+        /// </summary>
+        public static event Action? ToastActivated;
+
         private bool _initialized;
         private bool _supported;
         private readonly object _initLock = new();
+
+        /// <summary>
+        /// 保持对活跃 Toast 的引用，防止被 GC 回收导致 Activated 事件无法触发。
+        /// </summary>
+        private static readonly List<Windows.UI.Notifications.ToastNotification> _activeToasts = new();
 
         /// <summary>
         /// 初始化 Toast 通知系统（创建 Start Menu 快捷方式）。
@@ -95,6 +106,17 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 textNodes[1].AppendChild(template.CreateTextNode(message ?? ""));
 
                 var toast = new Windows.UI.Notifications.ToastNotification(template);
+
+                // ── 点击通知时触发回调 ──
+                toast.Activated += OnToastActivated;
+                toast.Dismissed += OnToastDismissed;
+
+                // 保持引用防止 GC
+                lock (_activeToasts)
+                {
+                    _activeToasts.Add(toast);
+                }
+
                 var notifier = Windows.UI.Notifications.ToastNotificationManager.CreateToastNotifier(AppId);
                 notifier.Show(toast);
 
@@ -103,6 +125,30 @@ namespace DeepSeek_v4_for_VisualStudio.Services
             catch (Exception ex)
             {
                 Logger.Warn($"[Toast] 发送通知失败: {ex.Message}");
+            }
+        }
+
+        private static void OnToastActivated(
+            Windows.UI.Notifications.ToastNotification sender, object args)
+        {
+            try
+            {
+                Logger.Debug("[Toast] 用户点击了通知，触发 ToastActivated 事件");
+                ToastActivated?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Toast] ToastActivated 回调异常: {ex.Message}");
+            }
+        }
+
+        private static void OnToastDismissed(
+            Windows.UI.Notifications.ToastNotification sender,
+            Windows.UI.Notifications.ToastDismissedEventArgs args)
+        {
+            lock (_activeToasts)
+            {
+                _activeToasts.Remove(sender);
             }
         }
 
@@ -136,6 +182,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 toastElement.AppendChild(progressNode);
 
                 var toast = new Windows.UI.Notifications.ToastNotification(template);
+
+                // ── 点击通知时触发回调 ──
+                toast.Activated += OnToastActivated;
+                toast.Dismissed += OnToastDismissed;
+
+                lock (_activeToasts)
+                {
+                    _activeToasts.Add(toast);
+                }
+
                 var notifier = Windows.UI.Notifications.ToastNotificationManager.CreateToastNotifier(AppId);
                 notifier.Show(toast);
 

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -21,6 +22,16 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         private const string ChatEndpoint = "/chat/completions";
         private const string FimBaseUrl = "https://api.deepseek.com/beta";
         private const string FimEndpoint = "/completions";
+
+        /// <summary>
+        /// 全局唯一的客户端实例 ID（每个进程生命周期内不变）。
+        /// 作为 X-Client-Instance-Id 请求头发送，帮助 DeepSeek API 服务端实现缓存亲和性。
+        /// </summary>
+        private static readonly string ClientInstanceId = Guid.NewGuid().ToString("N").Substring(0, 12);
+
+        /// <summary>ServicePointManager 是否已配置（全局一次性初始化）</summary>
+        private static volatile bool _servicePointConfigured;
+        private static readonly object _spInitLock = new object();
 
         private string _model;
         private bool _thinkingEnabled = true;
@@ -160,13 +171,38 @@ namespace DeepSeek_v4_for_VisualStudio.Services
         public DeepSeekApiService(string apiKey, string model = "deepseek-v4-pro")
         {
             _model = model;
-            _httpClient = new HttpClient
+
+            // ── 确保全局 ServicePoint 配置仅初始化一次 ──
+            ConfigureServicePointManagerOnce();
+
+            // ── 创建优化的 HttpClientHandler ──
+            //     目标：最大化 Agent 间 TCP 连接复用，提高服务端缓存亲和性概率。
+            //     同一 HttpClient 实例的所有请求共享连接池；
+            //     所有 Agent 通过 AgentFactory 共享同一个 DeepSeekApiService → 同一个 HttpClient。
+            var handler = new HttpClientHandler
+            {
+                AllowAutoRedirect = true,
+            };
+
+            _httpClient = new HttpClient(handler)
             {
                 BaseAddress = new Uri(BaseUrl),
                 Timeout = TimeSpan.FromMinutes(5)
             };
+
             _httpClient.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", apiKey);
+            _httpClient.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+            // ── 客户端实例 ID：帮助 DeepSeek API 服务端实现缓存亲和性 ──
+            //    同一客户端实例的所有请求携带相同 ID，服务端可据此将请求路由到同一后端节点，
+            //    提高 Agent 间的前缀缓存共享概率。
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Instance-Id", ClientInstanceId);
+
+            Logger.Info($"[HTTP] HttpClient 创建完成 (ClientId={ClientInstanceId}, " +
+                $"DefaultConnectionLimit={ServicePointManager.DefaultConnectionLimit}, " +
+                $"MaxIdleTime={ServicePointManager.MaxServicePointIdleTime}ms)");
         }
 
         /// <summary>
@@ -180,11 +216,74 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                 _httpClient.BaseAddress = new Uri(BaseUrl);
         }
 
+        /// <summary>
+        /// 全局 ServicePointManager 一次性配置 — 优化 TCP 连接复用。
+        /// 
+        /// 在 .NET Framework 4.7.2 上，TCP 连接池由 ServicePointManager 全局管理。
+        /// 默认 MaxIdleTime=100s, DefaultConnectionLimit=2 对高频 API 调用场景偏保守。
+        /// 
+        /// 优化策略：
+        ///   - DefaultConnectionLimit=10: 提高并发连接数，避免 Agent 切换时等待新连接
+        ///   - MaxServicePointIdleTime=300s: 延长空闲连接存活时间，提高 Agent 间复用概率
+        ///   - ReusePort=true: 允许端口复用，减少 TIME_WAIT
+        /// </summary>
+        private static void ConfigureServicePointManagerOnce()
+        {
+            if (_servicePointConfigured) return;
+            lock (_spInitLock)
+            {
+                if (_servicePointConfigured) return;
+                try
+                {
+                    ServicePointManager.DefaultConnectionLimit = 10;
+                    ServicePointManager.MaxServicePointIdleTime = 300_000; // 5 分钟
+                    ServicePointManager.Expect100Continue = true;
+                    ServicePointManager.ReusePort = true;
+                    _servicePointConfigured = true;
+                    Logger.Info($"[HTTP] ServicePointManager 全局配置完成: " +
+                        $"DefaultConnectionLimit={ServicePointManager.DefaultConnectionLimit}, " +
+                        $"MaxIdleTime={ServicePointManager.MaxServicePointIdleTime}ms");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"[HTTP] ServicePointManager 配置失败: {ex.Message}");
+                }
+            }
+        }
+
         public void UpdateModel(string model) => _model = model;
         public void ConfigureThinking(bool enabled, string effort = "high")
         {
             _thinkingEnabled = enabled;
             _reasoningEffort = effort;
+        }
+
+        /// <summary>
+        /// 连接复用诊断日志 — 记录 ServicePoint 当前连接状态。
+        /// 
+        /// 用途：监控 Agent 间是否复用同一 TCP 连接。
+        ///   - CurrentConnections 持续为 1 且无新建 → 连接被复用 ✅
+        ///   - CurrentConnections 频繁升降 → 连接在回收重建 ⚠️
+        ///   - 每次请求都是新 ServicePoint → 连接未曾复用 🔴
+        /// </summary>
+        private void LogConnectionReuseDiagnostics()
+        {
+            try
+            {
+                var sp = ServicePointManager.FindServicePoint(new Uri(BaseUrl));
+                // IdleSince 返回 DateTime（空闲开始的绝对时间），计算空闲时长
+                double idleMs = (DateTime.Now - sp.IdleSince).TotalMilliseconds;
+                Logger.Info($"[HTTP] 连接复用诊断: " +
+                    $"CurrentConnections={sp.CurrentConnections}, " +
+                    $"IdleSince={idleMs:F0}ms, " +
+                    $"ConnectionLimit={sp.ConnectionLimit}, " +
+                    $"SupportsPipelining={sp.SupportsPipelining}, " +
+                    $"ClientId={ClientInstanceId}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[HTTP] 连接复用诊断失败: {ex.Message}");
+            }
         }
 
         /// <summary>API 请求序号（用于转储文件命名）</summary>
@@ -662,6 +761,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services
                         HttpCompletionOption.ResponseHeadersRead,
                         cancellationToken);
                     response.EnsureSuccessStatusCode();
+
+                    // ── 连接复用诊断（v1.1.11）：追踪 ServicePoint 连接状态 ──
+                    //     帮助判断 Agent 间是否复用同一 TCP 连接，从而影响缓存亲和性。
+                    LogConnectionReuseDiagnostics();
+
                     break; // success
                 }
                 catch (HttpRequestException ex) when (sendAttempt < maxSendAttempts - 1)

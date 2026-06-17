@@ -1107,15 +1107,30 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         // ── 裁剪工具结果以保护上下文（与 ContextManager.AddToolResult 保持一致）──
                         string contextResult = CompactToolResultForAgent(tc.Function.Name, toolResult);
 
-                        // ── 🔑 v1.1.11：插入到 [agent] 之前，保持末尾固定 ──
-                        messages.Insert(toolInsertPos, new ChatApiMessage
+                        // ── 🔑 runSubagent 结果放到末尾（[agent] 之后、[user] 之前），
+                        //     保持前缀不被破坏，确保 DeepSeek Prefix Cache 跨轮次命中。──
+                        if (tc.Function.Name == "runSubagent")
                         {
-                            Role = "tool",
-                            Content = contextResult,
-                            ToolCallId = tc.Id,
-                            Name = tc.Function.Name
-                        });
-                        toolInsertPos++;
+                            messages.Insert(messages.Count - 1, new ChatApiMessage
+                            {
+                                Role = "tool",
+                                Content = contextResult,
+                                ToolCallId = tc.Id,
+                                Name = tc.Function.Name
+                            });
+                            // 不递增 toolInsertPos——runSubagent 结果不属于主历史前缀
+                        }
+                        else
+                        {
+                            messages.Insert(toolInsertPos, new ChatApiMessage
+                            {
+                                Role = "tool",
+                                Content = contextResult,
+                                ToolCallId = tc.Id,
+                                Name = tc.Function.Name
+                            });
+                            toolInsertPos++;
+                        }
 
                         // ── 同步 tool 结果到全局 ContextManager，确保重启后可恢复完整对话 ──
                         if (Context?.ContextManager != null)
@@ -1127,10 +1142,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     }
 
                     // ── 🔑 Explore 子代理消息注入（v1.1.11）：将 Explore 内部工具循环消息
-                    //     回注到父 Agent 的 messages 列表，使前缀缓存跨轮次一致。
+                    //     回注到父 Agent 的 messages 列表，确保后续轮次从 ContextManager
+                    //     重建时前缀结构完全一致。
                     //     Explore 执行期间通过 AddAssistantMessage/AddToolResult 写入
-                    //     ContextManager 的消息，在此刻读出并插入到 toolInsertPos 之前，
-                    //     确保后续轮次从 ContextManager 重建时前缀结构完全一致。──
+                    //     ContextManager 的消息，在此刻读出。
+                    //     🔑 v1.1.12：注入到 messages 末尾（[agent] 之后、[user] 之前），
+                    //     与 runSubagent 工具结果同位置，保持前缀不被破坏以最大化缓存命中。──
                     if (toolCalls.Any(tc => tc.Function.Name == "runSubagent")
                         && Context?.ContextManager != null)
                     {
@@ -1143,11 +1160,11 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                             {
                                 foreach (var em in exploreMessages)
                                 {
-                                    messages.Insert(toolInsertPos, em);
-                                    toolInsertPos++;
+                                    messages.Insert(messages.Count - 1, em);
                                 }
                                 Logger.Info($"[Agent:{Definition.Name}] 🔄 注入 Explore 子代理消息: " +
-                                    $"{exploreMessages.Count} 条 (CM 索引 {cmCountBefore}→{cmCountAfterExplore})");
+                                    $"{exploreMessages.Count} 条 (CM 索引 {cmCountBefore}→{cmCountAfterExplore})" +
+                                    $" → 末尾注入 (pos={messages.Count - 1 - exploreMessages.Count}..{messages.Count - 2})");
                             }
                         }
                     }

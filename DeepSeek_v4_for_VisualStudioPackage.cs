@@ -5,6 +5,7 @@ using DeepSeek_v4_for_VisualStudio.Settings;
 using DeepSeek_v4_for_VisualStudio.Utils;
 using DeepSeek_v4_for_VisualStudio.View;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -295,6 +296,54 @@ namespace DeepSeek_v4_for_VisualStudio
                 throw;
             }
 
+            // ═══ Toast 通知点击 → 激活 VS 窗口并打开工具窗口 ═══
+            ToastNotificationService.ToastActivated += () =>
+            {
+                _ = JoinableTaskFactory.RunAsync(async () =>
+                {
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+                    try
+                    {
+                        // 1. 将 VS 主窗口带到前台（最小化时恢复）
+                        DiagnosticLog.Write("[DeepSeek Init] Toast 点击：正在激活 VS 主窗口...");
+                        var dte = (EnvDTE.DTE?)GetService(typeof(EnvDTE.DTE));
+                        if (dte != null)
+                        {
+                            dte.MainWindow.Activate();
+                            DiagnosticLog.Write("[DeepSeek Init] Toast 点击：VS 主窗口已激活");
+                        }
+                        else
+                        {
+                            // 备用方案：通过 IVsUIShell 激活主窗口
+                            var uiShell = (IVsUIShell?)GetService(typeof(SVsUIShell));
+                            if (uiShell != null)
+                            {
+                                var guid = Guid.Empty;
+                                uiShell.GetDialogOwnerHwnd(out var hwnd);
+                                if (hwnd != IntPtr.Zero)
+                                {
+                                    ShowWindow(hwnd, SW_RESTORE);
+                                    SetForegroundWindow(hwnd);
+                                }
+                            }
+                        }
+
+                        // 2. 打开 DeepSeek Chat 工具窗口
+                        DiagnosticLog.Write("[DeepSeek Init] Toast 点击：正在打开工具窗口...");
+                        await ShowToolWindowAsync(
+                            typeof(DeepSeekChatWindowPane),
+                            0,
+                            create: true,
+                            cancellationToken: DisposalToken);
+                        DiagnosticLog.Write("[DeepSeek Init] Toast 点击：工具窗口已打开");
+                    }
+                    catch (Exception ex)
+                    {
+                        DiagnosticLog.Write($"[DeepSeek Init] Toast 点击打开窗口失败: {ex.GetType().Name}: {ex.Message}");
+                    }
+                });
+            };
+
             // ═══ 步骤 8/8：注册菜单命令 ═══
             try
             {
@@ -378,6 +427,20 @@ namespace DeepSeek_v4_for_VisualStudio
                 DiagnosticLog.Write($"[I18n] Failed to reload language: {ex.Message}");
             }
         }
+
+        #endregion
+
+        #region Native Methods (Toast 通知点击 → 激活 VS 窗口)
+
+        private const int SW_RESTORE = 9;
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         #endregion
     }
