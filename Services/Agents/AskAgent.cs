@@ -723,10 +723,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 summaryPrompt.AppendLine(langInstruction);
 
                 // ── 构建消息（带工具循环）──
+                // v1.1.11: 前置 SharedImmutablePrefix 以命中 Prompt Cache
                 string shortSystemPrompt = AiPrompts.ChangeSummarySystemPrompt;
 
                 var messages = new List<ChatApiMessage>
                 {
+                    new ChatApiMessage { Role = "system", Content = AiPrompts.SharedImmutablePrefix },
                     new ChatApiMessage { Role = "system", Content = shortSystemPrompt },
                     new ChatApiMessage { Role = "user", Content = summaryPrompt.ToString() }
                 };

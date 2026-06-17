@@ -131,8 +131,10 @@ namespace DeepSeek_v4_for_VisualStudio.View
 
                 var prompt = string.Format(LocalizationService.Instance["session.generateTitlePrompt"], userSnippet, assistantSnippet);
 
+                // ── v1.1.11: 前置 SharedImmutablePrefix 以命中 Prompt Cache ──
                 var messages = new List<ChatApiMessage>
                 {
+                    new ChatApiMessage { Role = "system", Content = AiPrompts.SharedImmutablePrefix },
                     new ChatApiMessage { Role = "user", Content = prompt }
                 };
 
