@@ -1,4 +1,4 @@
-using DeepSeek_v4_for_VisualStudio.Models;
+﻿using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Utils;
 using System;
 using System.Collections.Generic;
@@ -193,6 +193,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             // ── 跟踪每个文件的内存内容（原子性）──
             var fileState = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+            // ── 事务性备份追踪：记录 文件路径 → 备份路径 ──
+            var backups = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            bool anyFailed = false;
+
             foreach (var patch in patches)
             {
                 if (ct.IsCancellationRequested) break;
@@ -206,6 +210,12 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
                         ? await Task.Run(() => File.ReadAllText(resolvedPath), ct)
                         : string.Empty;
                     fileState[resolvedPath] = original;
+
+                    // ── 首次接触文件时创建备份（事务开始）──
+                    if (!backups.ContainsKey(resolvedPath))
+                    {
+                        backups[resolvedPath] = CreateBackup(resolvedPath);
+                    }
                 }
 
                 string currentContent = fileState[resolvedPath];
@@ -235,21 +245,14 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
                         result = await ApplySinglePatchAsync(
                             healingResponse.CorrectedPatch, resolvedPath, currentContent, ct);
 
-                        // ── 兜底：Healing 后仍失败 → 尝试 create_file ──
-                        if (!result.Success && !string.IsNullOrEmpty(result.FinalContent))
+                        // ── Healing 后仍失败：不写入文件，事务机制将自动回滚备份 ──
+                        if (!result.Success)
                         {
-                            Logger.Warn(LocalizationService.Instance.Format("tool.edit.insert.healingRetryFailed", resolvedPath));
-                            try
-                            {
-                                await Task.Run(() => File.WriteAllText(resolvedPath,
-                                    EditStringMatcher.NormalizeToCrLf(result.FinalContent!)), ct);
-                                result.Success = true;
-                                fileState[resolvedPath] = result.FinalContent!;
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.Error(LocalizationService.Instance.Format("tool.edit.insert.createFileFallbackFailed", ex.Message));
-                            }
+                            int failedCount = result.FailedHunks?.Count ?? 0;
+                            int totalCount = patch.Hunks.Count;
+                            Logger.Warn(string.Format(
+                                "文件 '{0}' 编辑失败：{1}/{2} 个 Hunk 无法应用（含 Healing 修复尝试）。文件未被修改。",
+                                Path.GetFileName(resolvedPath), failedCount, totalCount));
                         }
                     }
                 }
@@ -263,6 +266,22 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
                 }
 
                 results.Add(result);
+
+                // ── 追踪失败状态 ──
+                if (!result.Success)
+                    anyFailed = true;
+            }
+            // ── 事务提交/回滚 ──
+            if (anyFailed)
+            {
+                Logger.Warn("[Transaction] 部分 patch 应用失败，回滚所有已修改文件");
+                RollbackAll(backups);
+            }
+            else
+            {
+                foreach (var kvp in backups)
+                    CleanupBackup(kvp.Value);
+
             }
 
             return results;
@@ -486,8 +505,7 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             return result;
         }
 
-        private async Task<EditApplyResult> ApplySinglePatchAsync(
-            PatchOperation patch, string filePath, string fileContent, CancellationToken ct)
+        private async Task<EditApplyResult> ApplySinglePatchAsync(PatchOperation patch, string filePath, string fileContent, CancellationToken ct)
         {
             return await Task.Run(() => ApplySinglePatch(patch, filePath, fileContent), ct);
         }
@@ -995,6 +1013,92 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
         {
             // apply_patch 不使用此方法（直接使用 ExecutePatchesAsync）
             throw new NotSupportedException("ApplyPatchTool 使用 ExecutePatchesAsync 而非 GenerateEditForFileAsync");
+        }
+
+        #endregion
+        #region Backup & Restore
+
+        /// <summary>
+        /// 创建文件的 .orig.bak 备份，返回备份文件路径。
+        /// 文件不存在则返回 null。异常静默捕获并记录日志。
+        /// </summary>
+        internal static string? CreateBackup(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                    return null;
+
+                string backupPath = filePath + ".orig.bak";
+                File.Copy(filePath, backupPath, overwrite: true);
+                Logger.Info($"[Backup] 已创建备份: {backupPath}");
+                return backupPath;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Backup] 创建备份失败: {filePath} — {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 从备份恢复文件并删除备份。backupPath 为 null 或文件不存在则无操作。
+        /// 异常静默捕获并记录日志，保留备份文件让用户手动恢复。
+        /// </summary>
+        internal static void RestoreFromBackup(string filePath, string? backupPath)
+        {
+            if (string.IsNullOrEmpty(backupPath) || !File.Exists(backupPath))
+                return;
+
+            try
+            {
+                File.Copy(backupPath, filePath, overwrite: true);
+                File.Delete(backupPath);
+                Logger.Info($"[Backup] 已从备份恢复: {filePath} ← {backupPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Backup] 从备份恢复失败: {filePath} ← {backupPath} — {ex.Message}（备份文件已保留，请手动恢复）");
+            }
+        }
+
+        /// <summary>
+        /// 删除备份文件。backupPath 为 null 或文件不存在则无操作。
+        /// 异常静默捕获并记录日志。
+        /// </summary>
+        internal static void CleanupBackup(string? backupPath)
+        {
+            if (string.IsNullOrEmpty(backupPath) || !File.Exists(backupPath))
+                return;
+
+            try
+            {
+                File.Delete(backupPath);
+                Logger.Info($"[Backup] 已清理备份: {backupPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[Backup] 清理备份失败: {backupPath} — {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 遍历备份字典，恢复所有已备份的文件。
+        /// 用于事务失败时的统一回滚。单个文件恢复失败不中断其他文件的恢复。
+        /// </summary>
+        internal static void RollbackAll(Dictionary<string, string?> backups)
+        {
+            foreach (var kvp in backups)
+            {
+                try
+                {
+                    RestoreFromBackup(kvp.Key, kvp.Value);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"[Transaction] 回滚失败: {kvp.Key} — {ex.Message}（备份文件已保留，请手动恢复）");
+                }
+            }
         }
 
         #endregion

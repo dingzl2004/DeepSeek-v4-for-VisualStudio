@@ -249,8 +249,10 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
         /// </summary>
         private static string BuildAutoSplitPrompt(string userMessage)
         {
+            // 转义 userMessage 中的花括号，防止 string.Format 将其解释为格式占位符
+            string escapedMessage = (userMessage ?? "").Replace("{", "{{").Replace("}", "}}");
             return string.Format(AiPrompts.AutoSplitSystemPrompt,
-                MaxFilesPerEdit, MaxLinesPerEdit, userMessage);
+                MaxFilesPerEdit, MaxLinesPerEdit, escapedMessage);
         }
 
         /// <summary>

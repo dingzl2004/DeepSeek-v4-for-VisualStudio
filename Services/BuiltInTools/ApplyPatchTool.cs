@@ -1,4 +1,4 @@
-using DeepSeek_v4_for_VisualStudio.Models;
+﻿using DeepSeek_v4_for_VisualStudio.Models;
 using DeepSeek_v4_for_VisualStudio.Services.EditTools;
 using DeepSeek_v4_for_VisualStudio.Utils;
 using System;
@@ -120,37 +120,70 @@ namespace DeepSeek_v4_for_VisualStudio.Services.BuiltInTools
                 // ── 无 ApiService → 降级到静态 ApplySinglePatch（无 Healing）──
                 {
                     var results = new List<string>();
+                    var backups = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+                    bool anyFailed = false;
 
-                    foreach (var patch in patches)
+                    try
                     {
-                        string filePath = ResolvePath(patch.FilePath, workspaceRoot);
-
-                        var result = EditTools.ApplyPatchTool.ApplySinglePatch(
-                            patch, filePath,
-                            File.Exists(filePath) ? await Task.Run(() => File.ReadAllText(filePath)) : string.Empty);
-
-                        if (result.Success && !string.IsNullOrEmpty(result.FinalContent))
+                        foreach (var patch in patches)
                         {
-                            await Task.Run(() => File.WriteAllText(filePath,
-                                EditStringMatcher.NormalizeToCrLf(result.FinalContent)));
-                            results.Add(LocalizationService.Instance.Format("tool.applyPatch.applied",
-                                Path.GetFileName(filePath), patch.Hunks.Count));
+                            string filePath = ResolvePath(patch.FilePath, workspaceRoot);
+
+                            // ── 首次接触此文件时创建备份 ──
+                            if (File.Exists(filePath) && !backups.ContainsKey(filePath))
+                            {
+                                backups[filePath] = EditTools.ApplyPatchTool.CreateBackup(filePath);
+                            }
+
+                            var result = EditTools.ApplyPatchTool.ApplySinglePatch(
+                                patch, filePath,
+                                File.Exists(filePath) ? await Task.Run(() => File.ReadAllText(filePath)) : string.Empty);
+
+                            if (result.Success && !string.IsNullOrEmpty(result.FinalContent))
+                            {
+                                await Task.Run(() => File.WriteAllText(filePath,
+                                    EditStringMatcher.NormalizeToCrLf(result.FinalContent)));
+                                results.Add(LocalizationService.Instance.Format("tool.applyPatch.applied",
+                                    Path.GetFileName(filePath), patch.Hunks.Count));
+                            }
+                            else if (result.Success)
+                            {
+                                results.Add(LocalizationService.Instance.Format("tool.applyPatch.applied",
+                                    Path.GetFileName(filePath), patch.Hunks.Count));
+                            }
+                            else
+                            {
+                                string errorMsg = result.ErrorMessage ?? LocalizationService.Instance["tool.applyPatch.hunkFail"];
+                                results.Add(errorMsg);
+                                anyFailed = true;
+                            }
                         }
-                        else if (result.Success)
+
+                        // ── 失败回滚 ──
+                        if (anyFailed)
                         {
-                            results.Add(LocalizationService.Instance.Format("tool.applyPatch.applied",
-                                Path.GetFileName(filePath), patch.Hunks.Count));
+                            foreach (var kv in backups)
+                                EditTools.ApplyPatchTool.RestoreFromBackup(kv.Key, kv.Value);
+                            Logger.Warn("[Backup] 静态降级路径：部分 patch 失败，已回滚所有文件");
                         }
                         else
                         {
-                            string errorMsg = result.ErrorMessage ?? LocalizationService.Instance["tool.applyPatch.hunkFail"];
-                            results.Add(errorMsg);
+                            // ── 成功清理 ──
+                            foreach (var kv in backups)
+                                EditTools.ApplyPatchTool.CleanupBackup(kv.Value);
                         }
-                    }
 
-                    return results.Count > 0
-                        ? string.Join("\n", results)
-                        : LocalizationService.Instance["tool.applyPatch.noAction"];
+                        return results.Count > 0
+                            ? string.Join("\n", results)
+                            : LocalizationService.Instance["tool.applyPatch.noAction"];
+                    }
+                    catch
+                    {
+                        // ── 异常回滚 ──
+                        foreach (var kv in backups)
+                            EditTools.ApplyPatchTool.RestoreFromBackup(kv.Key, kv.Value);
+                        throw;
+                    }
                 }
             }
             catch (Exception ex)
