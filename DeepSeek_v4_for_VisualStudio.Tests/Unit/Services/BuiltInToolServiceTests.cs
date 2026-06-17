@@ -12,14 +12,14 @@ public class BuiltInToolServiceTests
     #region Tool Registration
 
     [Fact]
-    public void Constructor_RegistersAll19Tools()
+    public void Constructor_RegistersAll20Tools()
     {
         var service = new BuiltInToolService();
 
         var defs = service.GetFilteredToolDefinitions(null);
 
-        // 16 原有 + runSubagent + request_handoff + git = 19
-        defs.Should().HaveCount(19);
+        // 16 原有 + runSubagent + request_handoff + git + 1 = 20
+        defs.Should().HaveCount(20);
     }
 
     [Fact]
@@ -41,8 +41,8 @@ public class BuiltInToolServiceTests
 
         var defs = service.GetFilteredToolDefinitions(new List<string>());
 
-        // 16 原有 + runSubagent + request_handoff + git = 19
-        defs.Should().HaveCount(19);
+        // 16 原有 + runSubagent + request_handoff + git + 1 = 20
+        defs.Should().HaveCount(20);
     }
 
     [Fact]
@@ -52,8 +52,8 @@ public class BuiltInToolServiceTests
 
         var defs = service.GetFilteredToolDefinitions(null);
 
-        // 16 原有 + runSubagent + request_handoff + git = 19
-        defs.Should().HaveCount(19);
+        // 16 原有 + runSubagent + request_handoff + git + 1 = 20
+        defs.Should().HaveCount(20);
     }
 
     #endregion
@@ -90,11 +90,11 @@ public class BuiltInToolServiceTests
     #region Static GetBuiltInToolDefinitions
 
     [Fact]
-    public void GetBuiltInToolDefinitions_Returns19Tools()
+    public void GetBuiltInToolDefinitions_Returns20Tools()
     {
         var defs = BuiltInToolService.GetBuiltInToolDefinitions();
 
-        defs.Should().HaveCount(19);
+        defs.Should().HaveCount(20);
     }
 
     [Fact]
