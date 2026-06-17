@@ -511,7 +511,9 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
             var delLines = new List<string>();
             var insLines = new List<string>();
             int origIndex = 0;
+            int delOffset = -1; // 第一个 - 行在上下文中的偏移（-1 表示纯插入无删除）
             bool hasChanges = false;
+            int ctxLineIdx = 0; // 当前上下文行索引
 
             foreach (var line in hunk.Lines)
             {
@@ -519,17 +521,23 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
                 {
                     case ' ':
                         if (hasChanges)
+                        {
                             contextLines.Add(line.Text);
+                            ctxLineIdx++;
+                        }
                         else
                         {
                             contextLines.Add(line.Text);
                             origIndex++;
+                            ctxLineIdx++;
                         }
                         break;
                     case '-':
                         hasChanges = true;
+                        if (delOffset < 0) delOffset = ctxLineIdx;
                         delLines.Add(line.Text);
                         contextLines.Add(line.Text);
+                        ctxLineIdx++;
                         break;
                     case '+':
                         hasChanges = true;
@@ -540,6 +548,13 @@ namespace DeepSeek_v4_for_VisualStudio.Services.EditTools
 
             if (!hasChanges)
                 return (null, Array.Empty<string>());
+
+            // ── 修正 origIndex：当有删除行时，origIndex 应指向第一个 - 行位置（而非第一个 + 行）
+            //    防止 InsertLines 在 - 行之前时，删除位置偏移导致删错代码
+            if (delOffset >= 0 && delLines.Count > 0)
+            {
+                origIndex = delOffset;
+            }
 
             // ── 防御：检测尾部重复闭合符号 ──
             if (insLines.Count > 0 && contextLines.Count > 0)

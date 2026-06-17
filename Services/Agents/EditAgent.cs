@@ -3385,6 +3385,28 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                                 linesAdded = 1; // 文件不存在时至少标记为有变更
                             }
                         }
+                        else if (linesAdded == 0 && linesRemoved == 0)
+                        {
+                            // replace_string_in_file / multi_replace_string_in_file 等工具
+                            // 不返回 +N -M 格式，从参数中提取 oldString/newString 计算行数
+                            string? oldStr = ExtractStringArg(tc.Function?.Arguments ?? "", "oldString");
+                            string? newStr = ExtractStringArg(tc.Function?.Arguments ?? "", "newString");
+                            if (oldStr != null || newStr != null)
+                            {
+                                linesRemoved = oldStr != null ? CountLines(oldStr) : 0;
+                                linesAdded = newStr != null ? CountLines(newStr) : 0;
+                            }
+                            else if (File.Exists(filePath))
+                            {
+                                // 无法提取参数时，至少标记文件被修改
+                                linesAdded = 1;
+                                linesRemoved = 1;
+                            }
+                            else
+                            {
+                                linesAdded = 1;
+                            }
+                        }
 
                         string fileName = System.IO.Path.GetFileName(filePath);
                         string description = toolName switch
@@ -3443,6 +3465,22 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                 using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
                 if (doc.RootElement.TryGetProperty("filePath", out var fpProp))
                     return fpProp.GetString();
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 从工具参数 JSON 中按名称提取字符串参数。
+        /// </summary>
+        private static string? ExtractStringArg(string argumentsJson, string argName)
+        {
+            if (string.IsNullOrWhiteSpace(argumentsJson)) return null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
+                if (doc.RootElement.TryGetProperty(argName, out var prop))
+                    return prop.GetString();
             }
             catch { }
             return null;

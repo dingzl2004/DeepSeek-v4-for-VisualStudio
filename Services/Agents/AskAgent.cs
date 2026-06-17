@@ -386,6 +386,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                         ? step.ResultSummary
                         : "(无)";
                     sb.AppendLine($"- {icon} **{step.Title}**: {summary}");
+
+                    // 当 ResultSummary 仅为机械统计时，补充 Description 展示实际修改内容
+                    if (!string.IsNullOrWhiteSpace(step.Description)
+                        && (string.IsNullOrWhiteSpace(step.ResultSummary)
+                            || step.ResultSummary.StartsWith("修改了 ")
+                            || step.ResultSummary.StartsWith("Modified ")))
+                    {
+                        string desc = step.Description.Length > 120
+                            ? step.Description.Substring(0, 117) + "..."
+                            : step.Description;
+                        sb.AppendLine($"  > {desc}");
+                    }
                 }
                 sb.AppendLine();
             }
@@ -554,7 +566,18 @@ namespace DeepSeek_v4_for_VisualStudio.Services.Agents
                     sb.AppendLine($"### {L["edit.summary.changeSummary"]}");
                     sb.AppendLine();
                     foreach (var step in completedSteps)
+                    {
                         sb.AppendLine($"- ✅ **{step.Title}**: {step.ResultSummary}");
+                        // 当 ResultSummary 仅为机械统计时，补充 Description
+                        if (!string.IsNullOrWhiteSpace(step.Description)
+                            && (step.ResultSummary!.StartsWith("修改了 ") || step.ResultSummary.StartsWith("Modified ")))
+                        {
+                            string desc = step.Description.Length > 120
+                                ? step.Description.Substring(0, 117) + "..."
+                                : step.Description;
+                            sb.AppendLine($"  > {desc}");
+                        }
+                    }
                     sb.AppendLine();
                 }
             }
