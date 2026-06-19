@@ -25,11 +25,9 @@ jobs:
         git checkout no-local-paddleocr
         git reset --hard origin/master
 
-        # Apply PaddleOCR removal patch (no-op if master already has PaddleOCR removed)
-        if git apply --check .github/workflows/paddleocr-remove.patch 2>/dev/null; then
-          git apply .github/workflows/paddleocr-remove.patch
-          git add -A
-          git commit -m "chore: sync with master + remove PaddleOCR only [skip ci]" || true
-        fi
+        # Apply PaddleOCR removal patch — fail loudly if patch is stale
+        git apply .github/workflows/paddleocr-remove.patch
+        git add -A
+        git commit -m "chore: sync with master + remove PaddleOCR only [skip ci]"
 
         git push --force-with-lease origin no-local-paddleocr
