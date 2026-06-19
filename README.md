@@ -31,22 +31,19 @@
 
 | 特性 | 说明 |
 |------|------|
-| 🧠 **DeepSeek V4** | 流式对话、深度思考 (Reasoning)、Pro/Flash 双模型切换 |
-| 🤖 **多智能体** | Ask / Explore / Plan / Edit / Build 五种 Agent，Handoff 自动协作 |
-| 📐 **Skills 技能** | 用 Markdown (SKILL.md) 定义可复用 AI 工作流，`/` 斜杠命令触发 |
-| 🔧 **MCP 协议** | 连接外部工具服务器（HTTP + stdio），Function Calling 自动调用与分类注入 |
-| 📝 **三种编辑方法** | apply_patch / insert_edit / create_file，Levenshtein 四级匹配 + Healing 自动修复 |
-| 📚 **1M 上下文** | 900K Token 预算，智能压缩，文件不截断 |
-| 📊 **代码差异预览** | 编辑器内红绿 Diff 标记（EditorDiffMarkerService），逐块确认或一键全部应用 |
-| 💡 **Ghost Text 补全** | 行内灰色预测文本，上下文感知，Tab 接受 |
+| 🧠 **DeepSeek V4** | 流式对话、深度思考 (Reasoning)、Pro/Flash 双模型、断点续传、Prefix Cache |
+| 🤖 **多智能体** | Ask / Explore / Plan / Edit / Build 五种 Agent，Handoff 自动协作，实时计划监控，VS 构建集成 |
+| 📐 **Skills 技能** | Markdown (SKILL.md) 定义可复用 AI 工作流，`/` 斜杠命令触发 |
+| 🔧 **MCP 协议** | 连接外部工具服务器（HTTP + stdio），自动分类注入对应 Agent |
+| 📝 **代码编辑** | replace / apply_patch / create_file 等 5 种编辑工具，Levenshtein 四级匹配 + Healing 修复，Diff 预览，Ghost Text 行内补全 |
+| 📚 **1M 上下文** | 900K Token 预算，使用率达 85% 自动 LLM 摘要压缩，文件不截断 |
 | 🌐 **联网搜索** | 百度千帆 + DuckDuckGo 双引擎，额度耗尽自动切换 |
 | 🖼️ **图像 OCR** | PaddleOCR-Sharp 本地 / Windows 内置 / MCP 远程三引擎 |
 | 📄 **文件解析** | 拖拽或粘贴 50+ 格式（代码/文档/PDF/Office/图片），基于 NPOI + PdfPig |
 | 🛡️ **终端审批** | 命令执行前弹窗确认（BlockAll / AllowAll / SmartBlock 三模式） |
-| 🌍 **国际化** | 中英文自动切换，支持 `zh-CN.user.json` 自定义翻译覆盖 |
-| 🔄 **断点续传** | 网络中断自动恢复，已接收内容无缝衔接 |
 | 🧠 **AI 记忆系统** | 三层持久化记忆（用户/会话/仓库），AI 自主管理笔记，新对话自动注入 |
-| ⚡ **Prefix Cache** | 利用 DeepSeek Prefix Caching 优化重复上下文的 Token 消耗 |
+| 🔀 **Git 集成** | status / diff / log / add / commit / branch / checkout / pull / stash / reset 等 12 种操作 |
+| 🌍 **国际化** | 中英文自动切换，支持 `zh-CN.user.json` 自定义翻译覆盖 |
 
 
 ---
@@ -189,13 +186,18 @@ AI 通过 `memory` 工具管理三层持久化记忆：
 
 ## 📝 代码编辑能力
 
-### 三种编辑方法
+### 五种编辑工具
 
-| 方法 | 工具名 | 适用场景 |
-|------|--------|---------|
-| **精确替换** | `replace_string_in_file` | 单处修改 |
-| **多处替换** | `multi_replace_string_in_file` | 同文件多处修改 |
-| **补丁应用** | `apply_patch` | 复杂跨文件修改 |
+| 工具 | 适用场景 |
+|------|---------|
+| `replace_string_in_file` | 单处精确替换（含上下文定位） |
+| `multi_replace_string_in_file` | 同文件多处同时修改 |
+| `apply_patch` | 复杂跨文件修改（`*** Begin Patch` 格式） |
+| `create_file` | 创建新文件 |
+| `delete_file` | 删除文件 |
+| `create_directory` | 创建目录结构 |
+
+> 💡 `insert_edit` 功能已合并到 `apply_patch` 中，通过 `@@` 上下文标记定位插入位置。
 
 ### 四级匹配 + Healing 自动修复
 
@@ -256,18 +258,22 @@ AI 通过 `memory` 工具管理三层持久化记忆：
 | 集成测试 | 同上 | `Tests/Integration/` |
 | 代码覆盖率 | Coverlet 6.0.4 → Cobertura | CI 自动上传 |
 
+> ✅ 473+ 测试全部通过，5 个 Agent 100% 覆盖，26 个测试文件涵盖 Models / Services / Integration
+
 ---
 
 ## 🗺️ 路线图
 
 | 计划项 | 说明 | 优先级 |
 |--------|------|--------|
-| **RAG 代码检索增强** | 本地向量库（SQLite + 嵌入模型）、文件自动索引、BM25+向量混合检索、解决方案级跨项目符号索引 | 🔴 高 |
-| **测试生成 Skill** | 基于 `tdd` 技能自动生成 xUnit 测试 | 🟡 中 |
-| **Git 增强集成** | PR 描述生成、Commit Message 自动撰写 | 🟡 中 |
+| **RAG 代码检索增强** | 本地向量库（SQLite + 嵌入模型）、文件自动索引、BM25+向量混合检索、解决方案级符号索引 | 🔴 高 |
+| **项目代码知识图谱** | 基于代码 AST 的符号关系图，类/方法/接口依赖可视化，语义级代码导航与理解 | 🟡 中 |
+| **测试生成 Skill** | 基于 `tdd` 技能自动生成 xUnit 测试 | 🔴 高 |
+| **GitHub PR/Issue 深度集成** | PR 描述生成、Review 辅助、Issue 自动分派 | 🟡 中 |
+| **更多内置 Skills** | `debug-analyzer`、`sql-optimizer`、`api-designer` 等开箱即用技能 | 🟡 中 |
 | **本地模型支持** | Ollama / LM Studio 离线推理 | 🟢 低 |
 | **会话导出** | 对话导出为 Markdown / PDF / HTML | 🟢 低 |
-| **更多内置 Skills** | `debug-analyzer`、`sql-optimizer`、`api-designer` 等开箱即用技能 | 🟡 中 |
+| **多语言扩展** | 日语、韩语等更多 UI 语言支持 | 🟢 低 |
 
 > 💡 欢迎通过 [Issues](https://github.com/zmy15/DeepSeek-v4-for-VisualStudio/issues) 提出建议或贡献代码！
 

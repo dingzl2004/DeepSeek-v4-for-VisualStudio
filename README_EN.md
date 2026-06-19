@@ -31,22 +31,19 @@
 
 | Feature | Description |
 |---------|-------------|
-| 🧠 **DeepSeek V4** | Streaming chat, Deep Reasoning, Pro/Flash dual model switching |
-| 🤖 **Multi-Agent** | Five agents (Ask/Explore/Plan/Edit/Build) with Handoff auto-collaboration |
-| 📐 **Skills System** | Markdown-defined (SKILL.md) reusable AI workflows, triggered by `/` slash commands |
-| 🔧 **MCP Protocol** | Connect external tool servers (HTTP + stdio), auto Function Calling with classification injection |
-| 📝 **Three Edit Methods** | apply_patch / insert_edit / create_file, Levenshtein 4-tier matching + Healing auto-repair |
-| 📚 **1M Context** | 900K token budget, intelligent compression, files never truncated |
-| 📊 **Code Diff Preview** | In-editor red/green diff markers (EditorDiffMarkerService), per-hunk confirm or apply all |
-| 💡 **Ghost Text Completion** | Inline gray prediction text, context-aware, Tab to accept |
+| 🧠 **DeepSeek V4** | Streaming chat, Deep Reasoning, Pro/Flash dual models, resumable streaming, Prefix Cache |
+| 🤖 **Multi-Agent** | Five agents (Ask/Explore/Plan/Edit/Build), Handoff auto-collaboration, live plan monitoring, VS build integration |
+| 📐 **Skills System** | Markdown (SKILL.md) reusable AI workflows, triggered by `/` slash commands |
+| 🔧 **MCP Protocol** | Connect external tool servers (HTTP + stdio), auto-classify and inject into agents |
+| 📝 **Code Editing** | 5 edit tools (replace, apply_patch, create_file, etc.), Levenshtein 4-tier matching + Healing, Diff preview, Ghost Text inline completion |
+| 📚 **1M Context** | 900K token budget, auto LLM-summary compression at 85% usage, files never truncated |
 | 🌐 **Web Search** | Baidu Qianfan + DuckDuckGo dual engines, automatic fallback on quota exhaustion |
 | 🖼️ **Image OCR** | PaddleOCR-Sharp local / Windows built-in / MCP remote triple engines |
 | 📄 **File Parsing** | Drag-drop or paste 50+ formats (code/docs/PDF/Office/images), powered by NPOI + PdfPig |
 | 🛡️ **Terminal Approval** | Pre-execution confirmation dialog (BlockAll / AllowAll / SmartBlock modes) |
-| 🌍 **Internationalization** | Auto Chinese/English switching, `zh-CN.user.json` custom translation overrides |
-| 🔄 **Resumable Streaming** | Auto-recovery on network interruption, seamless continuation of received content |
 | 🧠 **AI Memory System** | Three-tier persistent memory (user/session/repo), AI-managed notes, auto-injected on new conversations |
-| ⚡ **Prefix Cache** | Leverage DeepSeek Prefix Caching to optimize token consumption for repeated contexts |
+| 🔀 **Git Integration** | status / diff / log / add / commit / branch / checkout / pull / stash / reset — 12 operations |
+| 🌍 **Internationalization** | Auto Chinese/English switching, `zh-CN.user.json` custom translation overrides |
 
 
 ---
@@ -189,13 +186,18 @@ Connect external tool servers via **Model Context Protocol**:
 
 ## 📝 Code Editing Capabilities
 
-### Three Edit Methods
+### Five Edit Tools
 
-| Method | Tool Name | Use Case |
-|--------|-----------|----------|
-| **Exact Replace** | `replace_string_in_file` | Single-location changes |
-| **Multi Replace** | `multi_replace_string_in_file` | Multiple changes in same file |
-| **Patch Apply** | `apply_patch` | Complex cross-file changes |
+| Tool | Use Case |
+|------|----------|
+| `replace_string_in_file` | Single exact replacement (with context anchoring) |
+| `multi_replace_string_in_file` | Multiple simultaneous changes in same file |
+| `apply_patch` | Complex cross-file changes (`*** Begin Patch` format) |
+| `create_file` | Create new files |
+| `delete_file` | Delete files |
+| `create_directory` | Create directory structures |
+
+> 💡 `insert_edit` has been merged into `apply_patch`, using `@@` context markers for insertion positioning.
 
 ### Four-Tier Matching + Healing Auto-Repair
 
@@ -256,18 +258,22 @@ Three approval modes: **BlockAll** / **AllowAll** / **SmartBlock** (recommended)
 | Integration Tests | Same as above | `Tests/Integration/` |
 | Code Coverage | Coverlet 6.0.4 → Cobertura | Auto-uploaded in CI |
 
+> ✅ 473+ tests all passing, 5 Agents 100% covered, 26 test files covering Models / Services / Integration
+
 ---
 
 ## 🗺️ Roadmap
 
 | Plan | Description | Priority |
 |------|-------------|----------|
-| **RAG Code Retrieval Enhancement** | Local vector DB (SQLite + embedding model), auto file indexing, BM25 + vector hybrid search, solution-level cross-project symbol indexing | 🔴 High |
-| **Test Generation Skill** | Auto-generate xUnit tests based on `tdd` skill | 🟡 Medium |
-| **Enhanced Git Integration** | PR description generation, auto commit message writing | 🟡 Medium |
+| **RAG Code Retrieval** | Local vector DB (SQLite + embedding model), auto file indexing, BM25 + vector hybrid search, solution-level symbol indexing | 🔴 High |
+| **Project Code Knowledge Graph** | AST-based symbol relationship graph, class/method/interface dependency visualization, semantic code navigation & understanding | 🟡 Medium |
+| **Test Generation Skill** | Auto-generate xUnit tests based on `tdd` skill | 🔴 High |
+| **GitHub PR/Issue Deep Integration** | PR description generation, review assistance, auto issue assignment | 🟡 Medium |
+| **More Built-in Skills** | `debug-analyzer`, `sql-optimizer`, `api-designer` and more out-of-the-box skills | 🟡 Medium |
 | **Local Model Support** | Ollama / LM Studio offline inference | 🟢 Low |
 | **Session Export** | Export conversations as Markdown / PDF / HTML | 🟢 Low |
-| **More Built-in Skills** | `debug-analyzer`, `sql-optimizer`, `api-designer` and other out-of-the-box skills | 🟡 Medium |
+| **Multi-Language UI** | Japanese, Korean and more UI language support | 🟢 Low |
 
 > 💡 Suggestions and code contributions welcome via [Issues](https://github.com/zmy15/DeepSeek-v4-for-VisualStudio/issues)!
 
